@@ -40,6 +40,10 @@ Part of [killertools.net](https://killertools.net).
 
 ## Download
 
+```
+winget install killerpdf
+```
+
 - Prebuilt binary: <https://github.com/SteveTheKiller/KillerPDF/releases/latest/download/KillerPDF.zip>
 - Source (GPL3 corresponding source for this release): <https://github.com/SteveTheKiller/KillerPDF/releases/download/v1.4.0/KillerPDF-1.4.0-src.zip>
 
