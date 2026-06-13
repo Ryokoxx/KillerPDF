@@ -14,18 +14,18 @@ Part of [killertools.net](https://killertools.net).
 - Inline text editing with font matching against the original document
 - Text boxes, freehand drawing, and highlight overlays with adjustable color, size, and opacity
 - Draw and save reusable signatures or import a PNG/JPG/BMP image as a signature, click to place anywhere on a page
-- Insert images onto any page as resizable annotations — drag the corner handle to scale, burned into the PDF on save
+- Insert images onto any page as resizable annotations - drag the corner handle to scale, burned into the PDF on save
 - Crop tool with corner drag handles; Enter to apply, Escape to cancel, remove crop from one page or all pages
-- Right-click sidebar: insert blank page, rotate CW/CCW, move up/down, extract, or delete — works on multi-page selections
-- PDF form filling: text inputs, checkboxes, and radio buttons render as live controls — fill and save back to PDF
+- Right-click sidebar: insert blank page, rotate CW/CCW, move up/down, extract, or delete - works on multi-page selections
+- PDF form filling: text inputs, checkboxes, and radio buttons render as live controls - fill and save back to PDF
 - PDF outline (bookmark) navigation: OUTLINES tab in the sidebar displays the bookmark tree; click any entry to jump to that page
 - Clickable PDF links and internal cross-references, including TOC back-links
-- Multi-page grid view toggle — switch between a scrollable grid of all pages and a focused single-page view
+- Multi-page grid view toggle - switch between a scrollable grid of all pages and a focused single-page view
 - Zoom preset dropdown with scroll-wheel sync; Fit to Width and Fit Page re-apply on window resize
-- Page number jump box in the toolbar — type a page number and press Enter to navigate directly
+- Page number jump box in the toolbar - type a page number and press Enter to navigate directly
 - Arrow key navigation and middle mouse button panning
 - Ctrl+S saves to the current file; Ctrl+Shift+S opens Save As
-- Keyboard shortcut overlay — press Ctrl+? for a full shortcut reference
+- Keyboard shortcut overlay - press Ctrl+? for a full shortcut reference
 - Full-text search across the entire document with result highlighting, drag-select to copy text
 - Print with annotations flattened into the output
 - Save Flattened PDF: rasterizes every page at 150 DPI into a fully uneditable document
