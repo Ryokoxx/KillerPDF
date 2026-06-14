@@ -31,18 +31,16 @@ KillerPDF is what I wanted: local-only, portable, no account, no telemetry. The 
 - Six color themes: Dark, Light, High Contrast, Blood, Greed, and Cyanotic. Switch live in Settings.
 - Zoom preset dropdown with scroll-wheel sync; Fit to Width and Fit Page re-apply on window resize
 - Page number jump box in the toolbar; type a page number and press Enter to navigate directly
-- Arrow key navigation and middle mouse button panning
-- Ctrl+S saves to the current file; Ctrl+Shift+S opens Save As
-- Keyboard shortcut overlay; press Ctrl+? for a full shortcut reference
+- Keyboard-driven navigation with arrow keys and middle-mouse panning, plus a full shortcut overlay (Ctrl+?)
 - Full-text search across the entire document with result highlighting, drag-select to copy text
-- Print with annotations flattened into the output
+- Print with annotations flattened into the output, print preview is rendered in print dialog.
 - Save Flattened PDF: rasterizes every page at 150 DPI into a fully uneditable document
 - Password-protected PDF support: prompts for password instead of erroring
 - Self-installing EXE: installs per-user to %LOCALAPPDATA% (no UAC), registers as PDF file handler, adds Start Menu and optional Desktop shortcuts, uninstalls cleanly via Add/Remove Programs
 
 ## Screenshots
 
-Five new built-in themes plus the original dark theme:
+Six themes to choose from:
 
 **Dark**
 ![KillerPDF - Dark theme](screenshots/6_Dark.png)
