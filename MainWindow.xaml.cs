@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Docnet.Core;
@@ -42,6 +43,7 @@ namespace KillerPDF
         private readonly StackPanel _continuousPanel = null!;
         private System.Threading.CancellationTokenSource? _continuousRenderCts;
         private readonly List<double> _continuousTops = [];
+        private int _gridScrollToPage = -1;   // page to scroll to once its grid tile streams in (-1 = none)
         private int _continuousScrollTarget = -1;  // re-scroll here once its true height is known
         private double _continuousPageW;
 
@@ -58,11 +60,17 @@ namespace KillerPDF
         private readonly Dictionary<int, string>    _formTextValues  = [];
         private readonly Dictionary<int, bool>      _formCheckValues = [];
         private readonly Dictionary<string, string> _formRadioValues = [];
+        private readonly Dictionary<int, double>    _formFontSizes   = [];   // per-field user font-size override (points)
+        // Floating font-size stepper shown while a form text field is focused.
+        private Border?  _formSizeBar;
+        private TextBox? _activeFormTb;
+        private int      _activeFormObj;
+        private double   _activeFormScale = 1;
         private const string FormOverlayTag = "FormFieldOverlay";
 
         // Undo stack — each entry is either an annotation removal or a full document snapshot.
-        private enum UndoKind { Annotation, Document }
-        private readonly record struct UndoEntry(UndoKind Kind, int PageIdx = -1, byte[]? DocBytes = null, bool WasDirty = false);
+        private enum UndoKind { Annotation, Document, StampBatch, ClearAnnotations }
+        private readonly record struct UndoEntry(UndoKind Kind, int PageIdx = -1, byte[]? DocBytes = null, bool WasDirty = false, int[]? Pages = null, PageAnnotation? Annot = null, Dictionary<int, List<PageAnnotation>>? AnnotSnapshot = null);
         private readonly Stack<UndoEntry> _undoStack = new();
         private bool _isDrawing;
         private Point _drawStart;
@@ -71,18 +79,25 @@ namespace KillerPDF
         private TextBox? _activeTextBox;
         private PageAnnotation? _selectedAnnotation;
         private Border? _selectionBorder;
+        // Shift+click multi-selection (Select tool): extra annotations selected alongside the
+        // primary _selectedAnnotation. Each gets its own outline. Delete removes the whole set.
+        private readonly List<PageAnnotation> _selectedSet = [];
+        private readonly List<Border> _selectionOutlines = [];
 
         // Draw/Highlight settings
         private Color _drawColor = Colors.Red;
         private double _drawWidth = 3;
         private byte _drawOpacity = 255;
         private Color _highlightColor = Color.FromArgb(80, 255, 255, 0);
+        // Strikethrough / underline lines: opaque red by default.
+        private Color _lineAnnotColor = Color.FromArgb(255, 220, 38, 38);
         private Border? _drawSettingsBar;
 
         // Text (typewriter) tool settings
         private double _textFontSize = 24;
         private TextAnnotation? _reeditOriginal;  // placed-text annotation currently being re-edited
         private Color _textColor = Colors.Black;
+        private byte _textOpacity = 255;          // alpha applied to placed text, like the draw tool
         private Border? _textSettingsBar;
 
         // Signature / image resize
@@ -161,12 +176,21 @@ namespace KillerPDF
         // Active annotation surface. Single view: always _annotationCanvas. Continuous view:
         // set on mouse-down to the clicked page's overlay. Shared handlers target this.
         private Canvas _activeCanvas = null!;
+        // The page surface a pointer gesture started on, captured on mouse-down. Kept separate
+        // from _activeCanvas because RenderAllAnnotations reuses _activeCanvas as its render
+        // target; in Grid view tiles stream in asynchronously and each one re-points _activeCanvas
+        // mid-gesture, which previously committed annotations to the wrong page and broke
+        // select/delete. Mouse-move/up resolve the gesture page and surface from these instead.
+        private Canvas? _gestureCanvas;
+        private int _gesturePage = -1;
         // Per-page overlay canvases for Continuous view, keyed by page index.
         private readonly Dictionary<int, Canvas> _continuousCanvases = [];
         private readonly Grid _pageContentGrid = null!;
         private readonly Button _toolSelectBtn = null!;
         private readonly Button _toolTextBtn = null!;
         private readonly Button _toolHighlightBtn = null!;
+        private readonly Button _toolStrikeBtn = null!;
+        private readonly Button _toolUnderlineBtn = null!;
         private readonly Button _toolDrawBtn = null!;
         private readonly Button _toolSignatureBtn = null!;
         private readonly Button _toolImageBtn = null!;
@@ -196,6 +220,8 @@ namespace KillerPDF
             _toolSelectBtn = (Button)FindName("ToolSelectBtn")!;
             _toolTextBtn = (Button)FindName("ToolTextBtn")!;
             _toolHighlightBtn = (Button)FindName("ToolHighlightBtn")!;
+            _toolStrikeBtn = (Button)FindName("ToolStrikeBtn")!;
+            _toolUnderlineBtn = (Button)FindName("ToolUnderlineBtn")!;
             _toolDrawBtn = (Button)FindName("ToolDrawBtn")!;
             _toolSignatureBtn = (Button)FindName("ToolSignatureBtn")!;
             _toolImageBtn = (Button)FindName("ToolImageBtn")!;
@@ -214,6 +240,9 @@ namespace KillerPDF
             PagePreviewPanel.ScrollChanged += PagePreviewPanel_ScrollChanged;
             if (Enum.TryParse<ViewMode>(App.GetSetting("ViewMode"), out var savedVm))
                 _viewMode = savedVm;
+            if (Enum.TryParse<ToolbarStyle>(App.GetSetting("ToolbarStyle"), out var savedTb))
+                _toolbarStyle = savedTb;
+            IndexToolbarButtons();
             OutlineTree.SelectedItemChanged += OutlineTree_SelectedItemChanged;
             LoadSignatures();
             BuildContextMenu();
@@ -230,6 +259,7 @@ namespace KillerPDF
             Loaded += (_, _) =>
             {
                 RestoreWindowSettings();
+                if (_toolbarStyle != ToolbarStyle.SmallIcons) ApplyToolbarAppearance();
 
                 var args = Environment.GetCommandLineArgs();
                 if (args.Length > 1 && System.IO.File.Exists(args[1]))
@@ -242,6 +272,8 @@ namespace KillerPDF
                     var lastFile = App.GetSetting("LastFile");
                     if (!string.IsNullOrEmpty(lastFile) && System.IO.File.Exists(lastFile))
                         OpenFile(lastFile!);
+                    else
+                        PopulateRecentFilesList();   // empty state: show the recent list
                 }
 
                 if (App.IsPortable())
@@ -258,6 +290,10 @@ namespace KillerPDF
             var hwnd = new WindowInteropHelper(this).Handle;
             HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
             ThemeManager.ApplyDwm(hwnd);
+            // Snapping moves the window without changing WindowState, so re-evaluate the rounded vs
+            // squared chrome on every move (and once now that the handle exists).
+            LocationChanged += OnWindowLocationChanged;
+            UpdateWindowChrome();
         }
 
         // ============================================================
@@ -274,27 +310,123 @@ namespace KillerPDF
             ThemeBloodRadio.IsChecked = cur == Theme.Blood;
             ThemeGreedRadio.IsChecked    = cur == Theme.Greed;
             ThemeCyanoticRadio.IsChecked = cur == Theme.Cyanotic;
-            // Sync language radios
+            ThemeCurrentLabel.Text       = ThemeDisplayName(cur);
+            // Sync language picker
             var curLoc = KillerPDF.Services.LocaleManager.Current;
             LangEnRadio.IsChecked   = curLoc == KillerPDF.Services.Locale.EnUS;
             LangEsRadio.IsChecked   = curLoc == KillerPDF.Services.Locale.Es;
             LangZhTWRadio.IsChecked = curLoc == KillerPDF.Services.Locale.ZhTW;
+            LangBnRadio.IsChecked   = curLoc == KillerPDF.Services.Locale.Bn;
+            LangTrRadio.IsChecked   = curLoc == KillerPDF.Services.Locale.TrTR;
+            LangCurrentLabel.Text   = LangDisplayName(curLoc);
             // Sync view mode radios
             ViewSingleRadio.IsChecked     = _viewMode == ViewMode.Single;
             ViewContinuousRadio.IsChecked = _viewMode == ViewMode.Continuous;
             ViewTwoPageRadio.IsChecked    = _viewMode == ViewMode.TwoPage;
             ViewGridRadio.IsChecked       = _viewMode == ViewMode.Grid;
-            SettingsOverlay.Visibility = Visibility.Visible;
+            ViewCurrentLabel.Text         = ViewModeDisplayName(_viewMode);
+            // Sync toolbar style picker
+            ToolbarSmallRadio.IsChecked  = _toolbarStyle == ToolbarStyle.SmallIcons;
+            ToolbarLargeRadio.IsChecked  = _toolbarStyle == ToolbarStyle.LargeIcons;
+            ToolbarBesideRadio.IsChecked = _toolbarStyle == ToolbarStyle.TextBeside;
+            ToolbarUnderRadio.IsChecked  = _toolbarStyle == ToolbarStyle.TextUnder;
+            ToolbarOnlyRadio.IsChecked   = _toolbarStyle == ToolbarStyle.TextOnly;
+            ToolbarCurrentLabel.Text     = ToolbarStyleName(_toolbarStyle);
+            FadeOverlayIn(SettingsOverlay);
+            // Place the panel (saved drag position, or the default tucked near the gear) and make
+            // its header a drag handle. Deferred to Loaded so ActualHeight is known.
+            PositionSettingsPanel();
+        }
+
+        private bool _settingsDragHooked;
+
+        /// <summary>
+        /// Positions the draggable Settings panel from its saved position, or defaults to the
+        /// bottom-left spot near the gear (a small left inset when the sidebar is collapsed). Also
+        /// wires up header dragging on first use. Runs after layout so sizes are known.
+        /// </summary>
+        private void PositionSettingsPanel()
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
+            {
+                // Force a layout pass so the panel's ActualWidth/Height are valid before clamping;
+                // otherwise a saved position could be clamped against a zero size and end up off-screen.
+                SettingsPanel.UpdateLayout();
+
+                if (int.TryParse(App.GetSetting("SettingsPanelLeft"), out int sl) &&
+                    int.TryParse(App.GetSetting("SettingsPanelTop"),  out int st))
+                {
+                    double l = sl, t = st;
+                    ClampPanelToBounds(SettingsPanel, SettingsOverlay, ref l, ref t);
+                    SettingsPanel.Margin = new Thickness(l, t, 0, 0);
+                }
+                else
+                {
+                    // Default: tucked near the gear at the bottom-left (matches the old anchor).
+                    double l = _sidebarCollapsed ? 34 : 100;
+                    double t = Math.Max(0, SettingsOverlay.ActualHeight - SettingsPanel.ActualHeight - 36);
+                    SettingsPanel.Margin = new Thickness(l, t, 0, 0);
+                }
+                if (!_settingsDragHooked)
+                {
+                    EnablePanelDrag(SettingsHeader, SettingsPanel, SettingsOverlay, "SettingsPanel");
+                    _settingsDragHooked = true;
+                }
+            }));
+        }
+
+        // ── Quick fade in/out for the full-window overlay panels (Settings/Shortcuts/About) ──
+        private static void FadeOverlayIn(UIElement el)
+        {
+            el.BeginAnimation(UIElement.OpacityProperty, null);
+            el.Opacity = 0;
+            el.Visibility = Visibility.Visible;
+            el.BeginAnimation(UIElement.OpacityProperty,
+                new DoubleAnimation(0, 1, new Duration(TimeSpan.FromMilliseconds(110)))
+                { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+        }
+
+        private static void FadeOverlayOut(UIElement el)
+        {
+            if (el.Visibility != Visibility.Visible) return;
+            var anim = new DoubleAnimation(1, 0, new Duration(TimeSpan.FromMilliseconds(90)))
+            { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } };
+            anim.Completed += (_, _) =>
+            {
+                el.Visibility = Visibility.Collapsed;
+                el.BeginAnimation(UIElement.OpacityProperty, null);
+                el.Opacity = 1;
+            };
+            el.BeginAnimation(UIElement.OpacityProperty, anim);
         }
 
         private void SettingsOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-            => SettingsOverlay.Visibility = Visibility.Collapsed;
+            => FadeOverlayOut(SettingsOverlay);
+
+        // While Settings is open the full-window overlay catches input. Let the wheel pass through to
+        // the content behind it (document or sidebar under the cursor) so the user can keep reading
+        // without the panel closing - only a click closes it.
+        private void SettingsOverlay_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            e.Handled = true;
+            var fwd = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+            {
+                RoutedEvent = UIElement.MouseWheelEvent,
+                Source = this
+            };
+            Point sp = e.GetPosition(_sidebarBorder);
+            bool overSidebar = _sidebarBorder is { IsVisible: true }
+                               && sp.X >= 0 && sp.X <= _sidebarBorder.ActualWidth
+                               && sp.Y >= 0 && sp.Y <= _sidebarBorder.ActualHeight;
+            if (overSidebar) PageList.RaiseEvent(fwd);
+            else            PagePreviewPanel.RaiseEvent(fwd);
+        }
 
         private void SettingsOverlayCard_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
             => e.Handled = true;
 
         private void SettingsOverlayClose_Click(object sender, RoutedEventArgs e)
-            => SettingsOverlay.Visibility = Visibility.Collapsed;
+            => FadeOverlayOut(SettingsOverlay);
 
         private void OnThemeChanged()
         {
@@ -307,39 +439,378 @@ namespace KillerPDF
             else
                 SwitchSidebarToPagesTab();
             RefreshSelectionAccent();
+            // The signature popup is built from snapshot (FindResource) colors, so rebuild it in place
+            // if it's open so it picks up the new theme without the user having to close and reopen it.
+            if (_signaturePopup is not null) ShowSignaturePopup();
         }
 
-        private void ThemeDarkRadio_Checked(object sender, RoutedEventArgs e)
-            => ThemeManager.Apply(Theme.Dark);
+        private void ThemeDarkRadio_Checked(object sender, RoutedEventArgs e)     => SelectTheme(Theme.Dark);
+        private void ThemeLightRadio_Checked(object sender, RoutedEventArgs e)    => SelectTheme(Theme.Light);
+        private void ThemeHCRadio_Checked(object sender, RoutedEventArgs e)       => SelectTheme(Theme.HighContrast);
+        private void ThemeBloodRadio_Checked(object sender, RoutedEventArgs e)    => SelectTheme(Theme.Blood);
+        private void ThemeGreedRadio_Checked(object sender, RoutedEventArgs e)    => SelectTheme(Theme.Greed);
+        private void ThemeCyanoticRadio_Checked(object sender, RoutedEventArgs e) => SelectTheme(Theme.Cyanotic);
 
-        private void ThemeLightRadio_Checked(object sender, RoutedEventArgs e)
-            => ThemeManager.Apply(Theme.Light);
+        private void SelectTheme(Theme theme)
+        {
+            ThemeManager.Apply(theme);
+            if (ThemeCurrentLabel is not null) ThemeCurrentLabel.Text = ThemeDisplayName(theme);
+            // Intentionally leave the flyout open so the user can try another theme right away
+            // without reopening the submenu.
+        }
 
-        private void ThemeHCRadio_Checked(object sender, RoutedEventArgs e)
-            => ThemeManager.Apply(Theme.HighContrast);
+        // Localized display name for each theme, shown on the picker row.
+        private string ThemeDisplayName(Theme t) => t switch
+        {
+            Theme.Light        => Loc("Str_Theme_Light"),
+            Theme.HighContrast => Loc("Str_Theme_HighContrast"),
+            Theme.Blood        => Loc("Str_Theme_Blood"),
+            Theme.Greed        => Loc("Str_Theme_Greed"),
+            Theme.Cyanotic     => Loc("Str_Theme_Cyanotic"),
+            _                  => Loc("Str_Theme_Dark"),
+        };
 
-        private void ThemeBloodRadio_Checked(object sender, RoutedEventArgs e)
-            => ThemeManager.Apply(Theme.Blood);
+        private void LangEnRadio_Checked(object sender, RoutedEventArgs e)   => SelectLocale(KillerPDF.Services.Locale.EnUS);
+        private void LangEsRadio_Checked(object sender, RoutedEventArgs e)   => SelectLocale(KillerPDF.Services.Locale.Es);
+        private void LangZhTWRadio_Checked(object sender, RoutedEventArgs e) => SelectLocale(KillerPDF.Services.Locale.ZhTW);
+        private void LangBnRadio_Checked(object sender, RoutedEventArgs e)   => SelectLocale(KillerPDF.Services.Locale.Bn);
+        private void LangTrRadio_Checked(object sender, RoutedEventArgs e)   => SelectLocale(KillerPDF.Services.Locale.TrTR);
 
-        private void ThemeGreedRadio_Checked(object sender, RoutedEventArgs e)
-            => ThemeManager.Apply(Theme.Greed);
+        private void SelectLocale(KillerPDF.Services.Locale loc)
+        {
+            KillerPDF.Services.LocaleManager.Apply(loc);
+            LangCurrentLabel.Text = LangDisplayName(loc);
+            // The Theme and Toolbar picker labels are set imperatively (not DynamicResource), so the
+            // language switch happening while the panel is open would leave them in the old language.
+            if (ThemeCurrentLabel is not null)   ThemeCurrentLabel.Text   = ThemeDisplayName(ThemeManager.Current);
+            if (ToolbarCurrentLabel is not null) ToolbarCurrentLabel.Text = ToolbarStyleName(_toolbarStyle);
+            if (ViewCurrentLabel is not null)    ViewCurrentLabel.Text    = ViewModeDisplayName(_viewMode);
+            LangMenuButton.IsChecked = false;   // closes the flyout (Popup.IsOpen is bound to this)
 
-        private void ThemeCyanoticRadio_Checked(object sender, RoutedEventArgs e)
-            => ThemeManager.Apply(Theme.Cyanotic);
+            // The status bar text is a formatted string (not a DynamicResource), so it keeps the
+            // language it was last set in. Re-set it in the new locale instead of leaving it stale.
+            if (_doc is not null && PageList.SelectedIndex >= 0)
+                SetStatus(string.Format(Loc("Str_PageOf"), PageList.SelectedIndex + 1, _doc.PageCount));
+            else
+                SetStatus(Loc("Str_Ready"));
 
-        private void LangEnRadio_Checked(object sender, RoutedEventArgs e)
-            => KillerPDF.Services.LocaleManager.Apply(KillerPDF.Services.Locale.EnUS);
+            // The canvas right-click menu is built once with Loc() values captured at build time,
+            // so rebuild it in the new language. (The sidebar menu is rebuilt on each open.)
+            BuildContextMenu();
 
-        private void LangEsRadio_Checked(object sender, RoutedEventArgs e)
-            => KillerPDF.Services.LocaleManager.Apply(KillerPDF.Services.Locale.Es);
+            // Toolbar captions are built with Loc() at apply time (they don't auto-update like a
+            // DynamicResource), so rebuild the toolbar on every language change. Harmless for the
+            // icon-only modes; refreshes the captions for Text-beside / Text-under / Text-only.
+            ApplyToolbarAppearance();
+        }
 
-        private void LangZhTWRadio_Checked(object sender, RoutedEventArgs e)
-            => KillerPDF.Services.LocaleManager.Apply(KillerPDF.Services.Locale.ZhTW);
+        // Native name (autonym) for each language, shown in the picker regardless of UI locale.
+        private static string LangDisplayName(KillerPDF.Services.Locale loc) => loc switch
+        {
+            KillerPDF.Services.Locale.Es   => "Español",
+            KillerPDF.Services.Locale.ZhTW => "中文 (繁體)",
+            KillerPDF.Services.Locale.Bn   => "বাংলা",
+            KillerPDF.Services.Locale.TrTR => "Türkçe",
+            _                              => "English",
+        };
 
-        private void ViewSingleRadio_Checked(object sender, RoutedEventArgs e)     { SetViewMode(ViewMode.Single);     SettingsOverlay.Visibility = Visibility.Collapsed; }
-        private void ViewContinuousRadio_Checked(object sender, RoutedEventArgs e) { SetViewMode(ViewMode.Continuous); SettingsOverlay.Visibility = Visibility.Collapsed; }
-        private void ViewTwoPageRadio_Checked(object sender, RoutedEventArgs e)    { SetViewMode(ViewMode.TwoPage);    SettingsOverlay.Visibility = Visibility.Collapsed; }
-        private void ViewGridRadio_Checked(object sender, RoutedEventArgs e)       { SetViewMode(ViewMode.Grid);       SettingsOverlay.Visibility = Visibility.Collapsed; }
+        private void ViewContinuousRadio_Checked(object sender, RoutedEventArgs e) => SelectViewMode(ViewMode.Continuous);
+        private void ViewSingleRadio_Checked(object sender, RoutedEventArgs e)     => SelectViewMode(ViewMode.Single);
+        private void ViewTwoPageRadio_Checked(object sender, RoutedEventArgs e)    => SelectViewMode(ViewMode.TwoPage);
+        private void ViewGridRadio_Checked(object sender, RoutedEventArgs e)       => SelectViewMode(ViewMode.Grid);
+
+        private void SelectViewMode(ViewMode mode)
+        {
+            SetViewMode(mode);
+            if (ViewCurrentLabel is not null) ViewCurrentLabel.Text = ViewModeDisplayName(mode);
+            // Leave the flyout and Settings panel open so the user can try view modes back to back.
+        }
+
+        private string ViewModeDisplayName(ViewMode mode) => mode switch
+        {
+            ViewMode.Single  => Loc("Str_View_Single"),
+            ViewMode.TwoPage => Loc("Str_View_TwoPage"),
+            ViewMode.Grid    => Loc("Str_View_Grid"),
+            _                => Loc("Str_View_Continuous"),
+        };
+
+        // ── Toolbar appearance (display-mode picker) ──────────────────────
+        // Icon size and whether captions show, picked as one exclusive mode. Hover tooltips stay on
+        // in every mode, so the text modes are about preference, not discoverability.
+        private enum ToolbarStyle { SmallIcons, LargeIcons, TextBeside, TextUnder, TextOnly }
+        private ToolbarStyle _toolbarStyle = ToolbarStyle.SmallIcons;   // default for new installs
+
+        // Each toolbar icon button paired with its glyph and label-resource key, built once so the
+        // appearance can be rebuilt without re-walking the tree.
+        private readonly List<(Button btn, string glyph, string labelKey)> _toolbarButtons = [];
+
+        // Maps each toolbar glyph (Segoe MDL2 Assets code point) to its caption string key. Buttons
+        // whose glyph isn't listed keep their icon with no caption.
+        private static readonly Dictionary<string, string> _toolbarLabelKeys = new()
+        {
+            [""] = "Str_Lbl_New",      [""] = "Str_Lbl_Open",      [""] = "Str_Lbl_Close",
+            [""] = "Str_Lbl_Save",     [""] = "Str_Lbl_Flatten",   [""] = "Str_Lbl_Print",
+            [""] = "Str_Lbl_Merge",    [""] = "Str_Lbl_Extract",   [""] = "Str_Lbl_Delete",
+            [""] = "Str_Lbl_MoveUp",   [""] = "Str_Lbl_MoveDown",
+            [""] = "Str_Lbl_Select",   [""] = "Str_Lbl_Text",      [""] = "Str_Lbl_Highlight",
+            [""] = "Str_Lbl_Strike",   [""] = "Str_Lbl_Underline", [""] = "Str_Lbl_Draw",
+            [""] = "Str_Lbl_Crop",     [""] = "Str_Lbl_Image",     [""] = "Str_Lbl_Signature",
+            [""] = "Str_Lbl_Undo",     [""] = "Str_Lbl_Clear",
+            [""] = "Str_Lbl_ZoomOut",  [""] = "Str_Lbl_ZoomIn",
+            [""] = "Str_Lbl_Highlight",   // current highlighter glyph (see ToolHighlightBtn)
+        };
+
+        // Walks LeftBar + RightBar once and records each icon button with its glyph + label key.
+        private void IndexToolbarButtons()
+        {
+            _toolbarButtons.Clear();
+            foreach (Panel? bar in new Panel?[] { LeftBar, RightBar })
+            {
+                if (bar is null) continue;
+                foreach (var btn in DescendantButtons(bar))
+                    if (btn.Content is string g && g.Length > 0 && _toolbarLabelKeys.TryGetValue(g, out var key))
+                        _toolbarButtons.Add((btn, g, key));
+            }
+        }
+
+        private static IEnumerable<Button> DescendantButtons(DependencyObject root)
+        {
+            foreach (var obj in LogicalTreeHelper.GetChildren(root))
+            {
+                if (obj is Button b) yield return b;
+                if (obj is DependencyObject d)
+                    foreach (var nested in DescendantButtons(d)) yield return nested;
+            }
+        }
+
+        // Rebuilds one toolbar button's content and size for the current mode. withLabel=false forces
+        // icon-only (used when Text-beside has to shed captions to fit a narrow window). Deliberately
+        // never touches Foreground/Background, so theme accents, the dirty-save tint, and the
+        // active-tool highlight survive (the caption TextBlocks inherit the button's foreground and
+        // the template's drop shadow).
+        private void SetToolbarButton(Button btn, string glyph, string key, bool withLabel)
+        {
+            var mode = _toolbarStyle;
+            bool large = mode == ToolbarStyle.LargeIcons;
+            bool beside = mode == ToolbarStyle.TextBeside;
+            bool under = mode == ToolbarStyle.TextUnder;
+            bool textOnly = mode == ToolbarStyle.TextOnly;
+            double glyphSize = (large || under) ? 20 : (beside ? 16 : 14);
+            btn.FontSize = glyphSize;
+
+            // Text only: caption, no icon (nothing to shed - there'd be nothing left).
+            if (textOnly)
+            {
+                btn.Width = double.NaN; btn.MinWidth = 0; btn.Height = 34; btn.Padding = new Thickness(8, 5, 8, 5);
+                btn.Content = new TextBlock
+                {
+                    Text = Loc(key),
+                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontSize = 12,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                return;
+            }
+
+            // Text beside the icon, while it still fits.
+            if (beside && withLabel)
+            {
+                btn.Width = double.NaN; btn.MinWidth = 0; btn.Height = 34; btn.Padding = new Thickness(8, 5, 8, 5);
+                var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                row.Children.Add(new TextBlock
+                {
+                    Text = glyph,
+                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontSize = glyphSize,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                row.Children.Add(new TextBlock
+                {
+                    Text = Loc(key),
+                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontSize = 12,
+                    Margin = new Thickness(7, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                btn.Content = row;
+                return;
+            }
+
+            // Text under the icon: a large icon stacked over a small caption, while it still fits.
+            if (under && withLabel)
+            {
+                btn.Width = double.NaN; btn.MinWidth = 0; btn.Height = 52; btn.Padding = new Thickness(6, 4, 6, 4);
+                var col = new StackPanel { Orientation = Orientation.Vertical, HorizontalAlignment = HorizontalAlignment.Center };
+                col.Children.Add(new TextBlock
+                {
+                    Text = glyph,
+                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontSize = glyphSize,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                });
+                col.Children.Add(new TextBlock
+                {
+                    Text = Loc(key),
+                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontSize = 10,
+                    Margin = new Thickness(0, 2, 0, 0),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    TextAlignment = TextAlignment.Center
+                });
+                btn.Content = col;
+                return;
+            }
+
+            // Icon only: the icon modes, or Text-beside / Text-under after a caption was shed.
+            btn.Width = (large || under) ? 46 : (beside ? 40 : 36);
+            btn.MinWidth = 0;
+            btn.Height = under ? 52 : (beside ? 34 : (large ? 42 : 32));
+            btn.Padding = (beside || under) ? new Thickness(8, 5, 8, 5) : new Thickness(10, 6, 10, 6);
+            btn.Content = glyph;
+        }
+
+        // Order in which Text-beside buttons shed their captions when the bar runs short of room:
+        // lowest rank sheds first. Zoom and Select go first (their icons are obvious); the annotation
+        // tools keep their captions longest because that is where the labels earn their space.
+        private static int LabelStripRank(string key) => key switch
+        {
+            "Str_Lbl_ZoomOut" or "Str_Lbl_ZoomIn" => 0,
+            "Str_Lbl_Select" => 1,
+            "Str_Lbl_Undo" or "Str_Lbl_Clear" => 2,
+            "Str_Lbl_New" or "Str_Lbl_Open" or "Str_Lbl_Close"
+                or "Str_Lbl_Save" or "Str_Lbl_Flatten" or "Str_Lbl_Print" => 3,
+            "Str_Lbl_MoveUp" or "Str_Lbl_MoveDown" or "Str_Lbl_Delete"
+                or "Str_Lbl_Merge" or "Str_Lbl_Extract" => 4,
+            _ => 5,   // annotation tools keep their labels longest
+        };
+
+        // Rebuilds every toolbar button for the current mode (captions on where applicable), then
+        // lets ReflowToolbar shed captions and/or collapse groups to fit the current width.
+        private void ApplyToolbarAppearance()
+        {
+            if (_toolbarButtons.Count == 0) return;
+            foreach (var (btn, glyph, key) in _toolbarButtons)
+                SetToolbarButton(btn, glyph, key, withLabel: true);
+            ReflowToolbar();
+        }
+
+        private void ToolbarSmallRadio_Checked(object sender, RoutedEventArgs e)  => SelectToolbarStyle(ToolbarStyle.SmallIcons);
+        private void ToolbarLargeRadio_Checked(object sender, RoutedEventArgs e)  => SelectToolbarStyle(ToolbarStyle.LargeIcons);
+        private void ToolbarBesideRadio_Checked(object sender, RoutedEventArgs e) => SelectToolbarStyle(ToolbarStyle.TextBeside);
+        private void ToolbarUnderRadio_Checked(object sender, RoutedEventArgs e)  => SelectToolbarStyle(ToolbarStyle.TextUnder);
+        private void ToolbarOnlyRadio_Checked(object sender, RoutedEventArgs e)   => SelectToolbarStyle(ToolbarStyle.TextOnly);
+
+        private void SelectToolbarStyle(ToolbarStyle style)
+        {
+            _toolbarStyle = style;
+            App.SetSetting("ToolbarStyle", style.ToString());
+            if (ToolbarCurrentLabel is not null) ToolbarCurrentLabel.Text = ToolbarStyleName(style);
+            ApplyToolbarAppearance();
+            // Leave the flyout open so the user can compare modes without reopening it.
+        }
+
+        private string ToolbarStyleName(ToolbarStyle style) => style switch
+        {
+            ToolbarStyle.LargeIcons => Loc("Str_Toolbar_LargeIcons"),
+            ToolbarStyle.TextBeside => Loc("Str_Toolbar_TextBeside"),
+            ToolbarStyle.TextUnder  => Loc("Str_Toolbar_TextUnder"),
+            ToolbarStyle.TextOnly   => Loc("Str_Toolbar_TextOnly"),
+            _                       => Loc("Str_Toolbar_SmallIcons"),
+        };
+
+        // ── Responsive toolbar overflow ───────────────────────────────────
+        private bool _reflowingToolbar;
+        private void ToolbarGrid_SizeChanged(object sender, SizeChangedEventArgs e) => ReflowToolbar();
+
+        // Collapses lower-priority button groups into the overflow popup when the toolbar runs
+        // out of room, and restores them when there is space again. Keeps the left/right layout.
+        private void ReflowToolbar()
+        {
+            if (_reflowingToolbar || ToolbarGrid is null || LeftBar is null || RightContainer is null) return;
+            _reflowingToolbar = true;
+            try
+            {
+                // Order in which buttons move to the overflow menu as the bar narrows: FIRST entry
+                // goes first. Lowest-value / most-redundant first - page move/delete and merge/extract
+                // (all reachable from the sidebar right-click), then signature/image/crop, then
+                // undo-clear, with the text-markup tools (draw, strike, underline, highlight, text)
+                // kept on the bar the longest. Zoom, Select, and the file basics never collapse here;
+                // they only shed their captions later (see LabelStripRank). Edit this list to retune.
+                var order = new (UIElement bar, UIElement[] items)[]
+                {
+                    (GrpPageEdit,       new UIElement[] { MiDelete, MiMoveUp, MiMoveDown }),
+                    (GrpPageOps,        new UIElement[] { MiMerge, MiExtract }),
+                    (GrpSignature,      new UIElement[] { MiSignature }),
+                    (ToolImageBtn,      new UIElement[] { MiImage }),
+                    (ToolCropBtn,       new UIElement[] { MiCrop }),
+                    (GrpUndo,           new UIElement[] { MiUndo, MiClear }),
+                    (ToolDrawBtn,       new UIElement[] { MiDraw }),
+                    (ToolStrikeBtn,     new UIElement[] { MiStrike }),
+                    (ToolUnderlineBtn,  new UIElement[] { MiUnderline }),
+                    (ToolHighlightBtn,  new UIElement[] { MiHighlight }),
+                    (ToolTextBtn,       new UIElement[] { MiText }),
+                };
+
+                // Start fully expanded (everything in the bar, nothing in the popup).
+                foreach (var (grp, items) in order)
+                {
+                    grp.Visibility = Visibility.Visible;
+                    foreach (var it in items) it.Visibility = Visibility.Collapsed;
+                }
+                ToolbarGrid.UpdateLayout();
+
+                double avail = ToolbarGrid.ActualWidth;
+
+                // Text-beside / Text-under: each pass starts with ALL captions on, so widening the
+                // window always restores them. Captions are only shed much later, as a last resort.
+                bool textCaptions = _toolbarStyle is ToolbarStyle.TextBeside or ToolbarStyle.TextUnder;
+                if (textCaptions && _toolbarButtons.Count > 0)
+                {
+                    foreach (var (btn, glyph, key) in _toolbarButtons)
+                        SetToolbarButton(btn, glyph, key, withLabel: true);
+                    ToolbarGrid.UpdateLayout();
+                }
+
+                // First defence against a narrow bar (and the long-standing behavior): collapse whole
+                // low-priority groups into the overflow menu, KEEPING captions on whatever stays. This
+                // is what runs at normal widths - captions stay, extras move to the chevron.
+                if (LeftBar.DesiredSize.Width + RightContainer.DesiredSize.Width > avail)
+                {
+                    foreach (var (grp, items) in order)
+                    {
+                        grp.Visibility = Visibility.Collapsed;          // pull this group out of the bar
+                        foreach (var it in items) it.Visibility = Visibility.Visible;  // ...into the popup
+                        ToolbarGrid.UpdateLayout();
+                        if (LeftBar.DesiredSize.Width + RightContainer.DesiredSize.Width + 30 <= avail) break;
+                    }
+                }
+
+                // Last resort, ONLY at the ultra-narrow width where everything collapsible is already
+                // in the overflow menu and the remaining captioned buttons still overlap: shed captions
+                // to icon-only in priority order (zoom and Select first, annotation tools last). Until
+                // this point the toolbar keeps its full captions, exactly as it looked before.
+                if (textCaptions && LeftBar.DesiredSize.Width + RightContainer.DesiredSize.Width > avail)
+                {
+                    foreach (var (btn, glyph, key) in _toolbarButtons.OrderBy(x => LabelStripRank(x.labelKey)))
+                    {
+                        if (LeftBar.DesiredSize.Width + RightContainer.DesiredSize.Width <= avail) break;
+                        if (!btn.IsVisible) continue;   // already collapsed into the overflow menu
+                        SetToolbarButton(btn, glyph, key, withLabel: false);
+                        ToolbarGrid.UpdateLayout();
+                    }
+                }
+
+                bool anyCollapsed = order.Any(o => o.bar.Visibility != Visibility.Visible);
+                OverflowChevron.Visibility = anyCollapsed ? Visibility.Visible : Visibility.Collapsed;
+                if (!anyCollapsed) OverflowChevron.IsChecked = false;
+            }
+            finally { _reflowingToolbar = false; }
+        }
+
+        private void OverflowItem_Click(object sender, RoutedEventArgs e)
+        {
+            OverflowChevron.IsChecked = false;   // close the flyout after a choice is made
+        }
 
         private const int  WM_GETMINMAXINFO   = 0x0024;
         private const int  WM_DPICHANGED      = 0x02E0;
@@ -396,6 +867,14 @@ namespace KillerPDF
             bool onTop    = my < rc.top    + ResizeBorder;
             bool onBottom = my >= rc.bottom - ResizeBorder;
 
+            // Never hijack a scrollbar for window resizing. The vertical scrollbar sits flush
+            // against the window's right edge, so the resize border used to swallow it - the
+            // cursor showed the resize arrow and dragging resized the window instead of moving
+            // the thumb. If a ScrollBar is under the cursor, report client area so it stays
+            // grabbable (Issue #75 follow-up).
+            if ((onLeft || onRight || onTop || onBottom) && IsOverScrollBar(mx, my))
+                return HTCLIENT;
+
             if (onTop    && onLeft)  return HTTOPLEFT;
             if (onTop    && onRight) return HTTOPRIGHT;
             if (onBottom && onLeft)  return HTBOTTOMLEFT;
@@ -408,7 +887,26 @@ namespace KillerPDF
             return 0;
         }
 
-        private static void WmGetMinMaxInfo(IntPtr hwnd, IntPtr lParam)
+        // Hit-tests the visual tree at a screen point (physical pixels from WM_NCHITTEST)
+        // and reports whether a ScrollBar sits under the cursor.
+        private bool IsOverScrollBar(int screenX, int screenY)
+        {
+            try
+            {
+                var pt  = PointFromScreen(new Point(screenX, screenY));
+                var res = VisualTreeHelper.HitTest(this, pt);
+                DependencyObject? hit = res?.VisualHit;
+                while (hit != null)
+                {
+                    if (hit is System.Windows.Controls.Primitives.ScrollBar) return true;
+                    hit = VisualTreeHelper.GetParent(hit);
+                }
+            }
+            catch { /* best-effort; fall through to normal resize handling */ }
+            return false;
+        }
+
+        private void WmGetMinMaxInfo(IntPtr hwnd, IntPtr lParam)
         {
             var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
             IntPtr monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -424,6 +922,15 @@ namespace KillerPDF
                 mmi.ptMaxSize.y = Math.Abs(work.bottom - work.top);
                 mmi.ptMaxTrackSize.x = mmi.ptMaxSize.x;
                 mmi.ptMaxTrackSize.y = mmi.ptMaxSize.y;
+                // Enforce the window's MinWidth/MinHeight during user resize. The custom chrome
+                // marks WM_GETMINMAXINFO handled, so WPF's own minimum enforcement is bypassed.
+                try
+                {
+                    var dpi = VisualTreeHelper.GetDpi(this);
+                    if (MinWidth  > 0 && !double.IsInfinity(MinWidth))  mmi.ptMinTrackSize.x = (int)Math.Ceiling(MinWidth  * dpi.DpiScaleX);
+                    if (MinHeight > 0 && !double.IsInfinity(MinHeight)) mmi.ptMinTrackSize.y = (int)Math.Ceiling(MinHeight * dpi.DpiScaleY);
+                }
+                catch { /* DPI not available yet; skip min enforcement for this pass */ }
                 Marshal.StructureToPtr(mmi, lParam, true);
             }
         }
@@ -447,6 +954,7 @@ namespace KillerPDF
 
         private const int WM_NCLBUTTONDOWN = 0x00A1;
         private const int WM_NCHITTEST     = 0x0084;
+        private const int HTCLIENT         = 1;
         private const int HTCAPTION        = 2;
         private const int HTLEFT           = 10;
         private const int HTRIGHT          = 11;
@@ -456,7 +964,7 @@ namespace KillerPDF
         private const int HTBOTTOM         = 15;
         private const int HTBOTTOMLEFT     = 16;
         private const int HTBOTTOMRIGHT    = 17;
-        private const int ResizeBorder     = 8;
+        private const int ResizeBorder     = 4;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int x; public int y; }
@@ -524,6 +1032,104 @@ namespace KillerPDF
 
         private void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();
 
+        // Rounded window corners look right only when floating; a maximized OR snapped window must
+        // square off or the rounded corners reveal the desktop / adjacent window behind them.
+        protected override void OnStateChanged(EventArgs e)
+        {
+            base.OnStateChanged(e);
+            UpdateWindowChrome();
+        }
+
+        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+        {
+            base.OnRenderSizeChanged(sizeInfo);
+            UpdateWindowChrome();
+            KeepSettingsPanelInWindow();
+        }
+
+        // Keeps the (draggable) Settings panel fully inside the window when the window is resized,
+        // so shrinking the window can't leave it clipped or stranded off-edge.
+        private void KeepSettingsPanelInWindow()
+        {
+            if (SettingsOverlay is null || SettingsPanel is null) return;
+            if (SettingsOverlay.Visibility != Visibility.Visible) return;
+            double l = SettingsPanel.Margin.Left, t = SettingsPanel.Margin.Top;
+            ClampPanelToBounds(SettingsPanel, SettingsOverlay, ref l, ref t);
+            SettingsPanel.Margin = new Thickness(l, t, 0, 0);
+        }
+
+        // Snapping changes the window's position/size but NOT its WindowState (it stays Normal), so
+        // re-evaluate the chrome on move too - otherwise a window snapped to a screen half keeps its
+        // rounded corners. (Hooked once in the constructor.)
+        private void OnWindowLocationChanged(object? sender, EventArgs e)
+        {
+            UpdateWindowChrome();
+            KeepSettingsPanelInWindow();
+        }
+
+        // Applies corner rounding, the frame border, and the content clip for the current window
+        // layout: floating = rounded; maximized or snapped = squared.
+        private void UpdateWindowChrome()
+        {
+            bool max     = WindowState == WindowState.Maximized;
+            bool squared = max || IsSnapped();
+            int  radius  = squared ? 0 : 7;
+            if (RootBorder != null)     RootBorder.CornerRadius     = new CornerRadius(radius);
+            if (TitleBarBorder != null) TitleBarBorder.CornerRadius = new CornerRadius(radius, radius, 0, 0);
+            if (FooterBorder != null)   FooterBorder.CornerRadius   = new CornerRadius(0, 0, radius, radius);
+            // Only a maximized window drops the 1px floating frame (it's flush to every screen edge).
+            // A snapped window keeps the border so it still reads against the window beside it.
+            if (RootBorder != null)     RootBorder.BorderThickness  = new Thickness(max ? 0 : 1);
+            UpdateRootClip(squared);
+        }
+
+        // Clips all window content to the rounded corners. A Border's CornerRadius rounds only its
+        // own background/border, not its children, so without this the title bar, footer, and grain
+        // paint square corners over the rounded frame. Squared off when maximized or snapped.
+        private void UpdateRootClip(bool squared)
+        {
+            if (RootClipGrid is null) return;
+            if (squared)
+            {
+                RootClipGrid.Clip = null;
+                return;
+            }
+            RootClipGrid.Clip = new RectangleGeometry(
+                new Rect(0, 0, RootClipGrid.ActualWidth, RootClipGrid.ActualHeight), 6, 6);
+        }
+
+        // True when the window is Aero-Snapped (half/quarter screen). Snapping leaves WindowState
+        // == Normal, so it's detected by comparing the window rect to the monitor work area: a
+        // snapped window is flush to a work-area edge and smaller than the full work area.
+        private bool IsSnapped()
+        {
+            if (WindowState != WindowState.Normal) return false;
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out RECT w)) return false;
+            IntPtr mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (mon == IntPtr.Zero) return false;
+            var info = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+            if (!GetMonitorInfo(mon, ref info)) return false;
+            RECT a = info.rcWork;
+
+            const int tol = 2; // device-pixel tolerance for "flush to edge"
+            bool flushLeft   = Math.Abs(w.left   - a.left)   <= tol;
+            bool flushRight  = Math.Abs(w.right  - a.right)  <= tol;
+            bool flushTop    = Math.Abs(w.top    - a.top)    <= tol;
+            bool flushBottom = Math.Abs(w.bottom - a.bottom) <= tol;
+            bool fillsWidth  = Math.Abs((w.right - w.left) - (a.right - a.left)) <= tol;
+            bool fillsHeight = Math.Abs((w.bottom - w.top) - (a.bottom - a.top)) <= tol;
+
+            // Exactly the work area (sized full but not maximized) is not a snap.
+            if (fillsWidth && fillsHeight) return false;
+            // Left/right half: full height, flush to one vertical edge, narrower than the work area.
+            if (flushTop && flushBottom && (flushLeft || flushRight) && !fillsWidth) return true;
+            // Quarter snap: flush into a corner and smaller than the work area in at least one axis.
+            if ((flushLeft || flushRight) && (flushTop || flushBottom) && (!fillsWidth || !fillsHeight))
+                return true;
+            return false;
+        }
+
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             if (_isDirty)
@@ -561,6 +1167,8 @@ namespace KillerPDF
                 App.SetSetting("ZoomLevel", _zoomLevel.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 if (_currentFile is not null)
                     App.SetSetting("LastFile", _currentFile);
+                else
+                    App.RemoveSetting("LastFile");
             }
             catch { /* best-effort */ }
         }
@@ -616,17 +1224,19 @@ namespace KillerPDF
 
         private void ApplyGrainTexture()
         {
-            // Sparse bright-speck film grain — same style as the first pass,
-            // tuned so the texture is visible without being chunky.
+            // Film grain with a mix of bright AND dark specks so the texture reads
+            // on any background - bright specks show on dark themes, dark specks
+            // show on light themes. Denser and a touch stronger than the first pass.
             const int size = 256;
             var bmp = new WriteableBitmap(size, size, 96, 96, PixelFormats.Bgra32, null);
             var pixels = new byte[size * size * 4]; // start fully transparent
             var rng = new Random(1337);
             for (int i = 0; i < pixels.Length; i += 4)
             {
-                if (rng.Next(4) != 0) continue;       // ~25% pixel density
-                byte v = (byte)rng.Next(160, 255);     // bright specks
-                byte a = (byte)rng.Next(30, 80);       // low-ish alpha for subtlety
+                if (rng.Next(3) != 0) continue;       // ~33% pixel density
+                bool bright = rng.Next(2) == 0;        // half bright, half dark
+                byte v = bright ? (byte)rng.Next(190, 255) : (byte)rng.Next(0, 50);
+                byte a = (byte)rng.Next(35, 95);       // alpha for subtlety
                 pixels[i]     = v;
                 pixels[i + 1] = v;
                 pixels[i + 2] = v;
@@ -634,6 +1244,9 @@ namespace KillerPDF
             }
             bmp.WritePixels(new System.Windows.Int32Rect(0, 0, size, size), pixels, size * 4, 0);
             GrainBrush.ImageSource = bmp;
+            if (SidebarGrainBrush != null) SidebarGrainBrush.ImageSource = bmp;
+            if (ToggleGrainBrush != null) ToggleGrainBrush.ImageSource = bmp;
+            if (Resources["GrainBrushShared"] is ImageBrush sharedGrain) sharedGrain.ImageSource = bmp;
         }
 
         /// <summary>Generated film-grain tile, exposed so secondary windows (e.g. the
@@ -643,21 +1256,25 @@ namespace KillerPDF
         private void BuildContextMenu()
         {
             var menu = new ContextMenu();
+            TextOptions.SetTextFormattingMode(menu, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(menu, TextRenderingMode.Grayscale);
 
-            menu.Items.Add(MakeMenuItem("Copy Text", (s, e) => CopySelectedText(), "Ctrl+C"));
-            menu.Items.Add(MakeMenuItem("Print", (s, e) => Print_Click(s!, e), "Ctrl+P"));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_CopyText"), (s, e) => CopySelectedText(), "Ctrl+C"));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Print"), (s, e) => Print_Click(s!, e), "Ctrl+P"));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem("Select Tool", (s, e) => SetTool(EditTool.Select)));
-            menu.Items.Add(MakeMenuItem("Text Tool", (s, e) => SetTool(EditTool.Text)));
-            menu.Items.Add(MakeMenuItem("Highlight Tool", (s, e) => SetTool(EditTool.Highlight)));
-            menu.Items.Add(MakeMenuItem("Draw Tool", (s, e) => SetTool(EditTool.Draw)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_SelectTool"), (s, e) => SetTool(EditTool.Select)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_TextTool"), (s, e) => SetTool(EditTool.Text)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_HighlightTool"), (s, e) => SetTool(EditTool.Highlight)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DrawTool"), (s, e) => SetTool(EditTool.Draw)));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem("Rotate Page CW",  (s, e) => RotatePages_Click(90)));
-            menu.Items.Add(MakeMenuItem("Rotate Page CCW", (s, e) => RotatePages_Click(-90)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCW"),  (s, e) => RotatePages_Click(90)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCCW"), (s, e) => RotatePages_Click(-90)));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem("Delete Selected", (s, e) => DeleteSelected(), "Delete"));
-            menu.Items.Add(MakeMenuItem("Undo Last", (s, e) => Undo_Click(s!, e), "Ctrl+Z"));
-            menu.Items.Add(MakeMenuItem("Clear Page Annotations", (s, e) => ClearAnnotations_Click(s!, e)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_StampNumbers"), (s, e) => StampPageNumbers()));
+            menu.Items.Add(new Separator());
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DeleteSel"), (s, e) => DeleteSelected(), "Delete"));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_UndoLast"), (s, e) => Undo_Click(s!, e), "Ctrl+Z"));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_ClearPage"), (s, e) => ClearAnnotations_Click(s!, e)));
 
             _annotationCanvas.ContextMenu = menu;
         }
@@ -666,16 +1283,20 @@ namespace KillerPDF
         {
             if (_doc is null) return;
             var menu = new ContextMenu();
-            menu.Items.Add(MakeMenuItem("Insert Blank Page After", (s, ev) => InsertBlankPage_Click(s!, ev)));
+            TextOptions.SetTextFormattingMode(menu, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(menu, TextRenderingMode.Grayscale);
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_InsertBlank"), (s, ev) => InsertBlankPage_Click(s!, ev)));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem("Rotate CW",  (s, ev) => RotatePages_Click(90)));
-            menu.Items.Add(MakeMenuItem("Rotate CCW", (s, ev) => RotatePages_Click(-90)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCWShort"),  (s, ev) => RotatePages_Click(90)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCCWShort"), (s, ev) => RotatePages_Click(-90)));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem("Move Page Up",   (s, ev) => MoveUp_Click(s!, ev)));
-            menu.Items.Add(MakeMenuItem("Move Page Down", (s, ev) => MoveDown_Click(s!, ev)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Lbl_MoveUp"),   (s, ev) => MoveUp_Click(s!, ev)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Lbl_MoveDown"), (s, ev) => MoveDown_Click(s!, ev)));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem("Extract Page(s)", (s, ev) => Split_Click(s!, ev)));
-            menu.Items.Add(MakeMenuItem("Delete Page(s)", (s, ev) => Delete_Click(s!, ev)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_ExtractPages"), (s, ev) => Split_Click(s!, ev)));
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DeletePages"), (s, ev) => Delete_Click(s!, ev)));
+            menu.Items.Add(new Separator());
+            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_StampNumbers"), (s, ev) => StampPageNumbers()));
             menu.PlacementTarget = PageList;
             menu.IsOpen = true;
             e.Handled = true;
@@ -722,6 +1343,9 @@ namespace KillerPDF
 
         private void OpenFile(string path)
         {
+            // Record real user files in the recent list (skips blank/new docs, which don't open a path).
+            if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path)) App.AddRecentFile(path);
+
             // Files on UNC / network shares - notably the WSL \\wsl$ 9P filesystem - can hand
             // back partial reads, making the PDF parser see a truncated file ("Unexpected EOF").
             // Copy such files to a local temp via File.ReadAllBytes (which reads to EOF) and open
@@ -820,7 +1444,7 @@ namespace KillerPDF
                 {
                     // ReadOnly also failed — offer to repair.
                     var result = KillerDialog.Show(this,
-                        $"This PDF has a damaged structure and couldn't be opened.\n\nWould you like KillerPDF to attempt a repair? A repaired copy will be created — the original file will not be changed.\n\nNote: repaired files may be missing bookmarks, forms, and other interactive features.",
+                        $"This PDF has a damaged structure and couldn't be opened.\n\nWould you like KillerPDF to attempt a repair? A repaired copy will be created - the original file will not be changed.\n\nNote: repaired files may be missing bookmarks, forms, and other interactive features.",
                         "KillerPDF", MessageBoxButton.YesNo, MessageBoxImage.Warning);
                     if (result == MessageBoxResult.Yes)
                         TryRepairAndOpen(srcPath);
@@ -1119,13 +1743,75 @@ namespace KillerPDF
             catch { return false; }
         }
 
-        private void TryRepairAndOpen(string path)
+        private async void TryRepairAndOpen(string path)
         {
-            // Strategy 1: PdfSharpCore Import mode — page-copy, more lenient than Modify/ReadOnly.
-            // Works when the XRef is partially corrupt but the object data is intact.
+            // Repair is CPU/IO heavy, so it runs on a background thread behind a spinner overlay -
+            // otherwise the window froze (hourglass, no feedback) for the whole repair. Only the
+            // file production runs off-thread; opening/rendering the result stays on the UI thread.
+            var busy = ShowBusyOverlay("Repairing PDF...");
             try
             {
+                // Release any open document before the worker reads the source file.
                 if (_doc is not null) { _doc.Close(); _doc = null; }
+
+                string? repairedPath = null;
+                bool raster = false;
+
+                // Strategy 1: PdfSharpCore Import mode - page-copy, more lenient than Modify/ReadOnly.
+                // Works when the XRef is partially corrupt but the object data is intact. (Returns
+                // null on failure rather than throwing.)
+                repairedPath = await System.Threading.Tasks.Task.Run(() => RepairViaImportToFile(path));
+
+                // Strategy 2: PDFium rasterize. PDFium's internal XRef recovery handles damage
+                // PdfSharpCore cannot; each page is rendered to a bitmap and rebuilt into a clean PDF.
+                // Text won't be selectable in the result, but the file will open and print.
+                if (repairedPath is null)
+                {
+                    repairedPath = await System.Threading.Tasks.Task.Run(() => RepairViaDocnetRasterizeToFile(path));
+                    raster = repairedPath is not null;
+                }
+
+                if (repairedPath is null)
+                {
+                    HideBusyOverlay(busy);
+                    KillerDialog.Show(this,
+                        "Repair failed - the file is too severely damaged to recover.\n\nTry opening the original in a different application (Adobe Acrobat, browsers) which may have additional recovery options.",
+                        "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                // Open and render the repaired copy on the UI thread.
+                _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
+                _currentFile = repairedPath;
+                FinishOpenFile(path, repairedPath);
+                MarkDirty(true); // repaired copy lives in temp - user must Save As
+                SetStatus(string.Format(Loc(raster ? "Str_OpenedRasterRepair" : "Str_OpenedRepaired"),
+                                        System.IO.Path.GetFileName(path), _doc.PageCount));
+                HideBusyOverlay(busy);
+                KillerDialog.Show(this,
+                    raster
+                        ? $"\"{System.IO.Path.GetFileName(path)}\" was repaired by rasterizing through PDFium.\n\nText is not selectable in the repaired copy. Use Save As to write it to a new location."
+                        : $"\"{System.IO.Path.GetFileName(path)}\" was repaired successfully.\n\nBookmarks, forms, and other interactive features may have been lost. Use Save As to write the repaired file to a new location.",
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.None);
+            }
+            catch (Exception ex)
+            {
+                HideBusyOverlay(busy);
+                KillerDialog.Show(this, $"Repair failed:\n{ex.Message}", "KillerPDF",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// Strategy 1 worker (background-safe, no UI/_doc access): page-copies the source through
+        /// PdfSharpCore Import mode into a clean temp PDF and returns its path.
+        /// </summary>
+        private static string? RepairViaImportToFile(string path)
+        {
+            // Returns null (never throws) so a failed strategy falls through cleanly to the next one
+            // and doesn't surface as a debugger "user-unhandled" break during the awaited Task.
+            try
+            {
                 PdfDocument repairedDoc;
                 using (var importDoc = PdfReader.Open(path, PdfDocumentOpenMode.Import))
                 {
@@ -1136,102 +1822,74 @@ namespace KillerPDF
                 var repairedPath = App.MakeTempFile("repaired");
                 repairedDoc.Save(repairedPath);
                 repairedDoc.Close();
-                _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
-                _currentFile = repairedPath;
-                FinishOpenFile(path, repairedPath);
-                MarkDirty(true); // repaired copy lives in temp — user must Save As
-                SetStatus(string.Format(Loc("Str_OpenedRepaired"), System.IO.Path.GetFileName(path), _doc.PageCount));
-                KillerDialog.Show(this,
-                    $"\"{System.IO.Path.GetFileName(path)}\" was repaired successfully.\n\nBookmarks, forms, and other interactive features may have been lost. Use Save As to write the repaired file to a new location.",
-                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.None);
-                return;
+                return repairedPath;
             }
-            catch { }
-
-            // Strategy 2: PDFium rasterize repair.
-            // PDFium has its own internal XRef recovery that handles damage PdfSharpCore cannot.
-            // Each page is rendered to a bitmap and rebuilt into a clean PDF.
-            // Text will not be selectable in the result, but the file will open and be printable.
-            try
-            {
-                RepairViaDocnetRasterize(path);
-                return;
-            }
-            catch { }
-
-            KillerDialog.Show(this,
-                "Repair failed — the file is too severely damaged to recover.\n\nTry opening the original in a different application (Adobe Acrobat, browsers) which may have additional recovery options.",
-                "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+            catch { return null; }
         }
 
         /// <summary>
-        /// Repair fallback: uses PDFium (Docnet) to render each page to a bitmap, then rebuilds
-        /// a clean PdfSharpCore document from those bitmaps. Works on files where the XRef/trailer
-        /// is too damaged for PdfSharpCore's parser but PDFium's recovery logic can still render.
+        /// Strategy 2 worker (background-safe, no UI/_doc access): uses PDFium (Docnet) to render
+        /// each page to a bitmap, rebuilds a clean PdfSharpCore document from those bitmaps, and
+        /// returns its temp path. Mirrors the flatten path, which also encodes off the UI thread.
         /// </summary>
-        private void RepairViaDocnetRasterize(string path)
+        private static string? RepairViaDocnetRasterizeToFile(string path)
         {
-            const int RenderPx = 2048;
-
-            using var docReader = DocLib.Instance.GetDocReader(path, new PageDimensions(RenderPx, RenderPx));
-            int pageCount = docReader.GetPageCount();
-            if (pageCount <= 0) throw new InvalidOperationException("PDFium could not read any pages.");
-
-            var newDoc = new PdfDocument();
-
-            for (int i = 0; i < pageCount; i++)
+            // Returns null (never throws) so the caller can show a clean "repair failed" message
+            // without a debugger break on the awaited Task.
+            try
             {
-                using var pr = docReader.GetPageReader(i);
-                int bw = pr.GetPageWidth();
-                int bh = pr.GetPageHeight();
-                if (bw <= 0 || bh <= 0) continue;
+                const int RenderPx = 2048;
 
-                var raw = pr.GetImage();
-                if (raw is null || raw.Length == 0) continue;
+                using var docReader = DocLib.Instance.GetDocReader(path, new PageDimensions(RenderPx, RenderPx));
+                int pageCount = docReader.GetPageCount();
+                if (pageCount <= 0) return null;
 
-                // Encode the raw BGRA frame as PNG via WPF BitmapEncoder (UI thread is fine here).
-                var wb = new WriteableBitmap(bw, bh, 96, 96, PixelFormats.Bgra32, null);
-                wb.WritePixels(new Int32Rect(0, 0, bw, bh), raw, bw * 4, 0);
-                wb.Freeze();
+                var newDoc = new PdfDocument();
 
-                byte[] pngBytes;
-                using (var ms = new System.IO.MemoryStream())
+                for (int i = 0; i < pageCount; i++)
                 {
-                    var enc = new PngBitmapEncoder();
-                    enc.Frames.Add(BitmapFrame.Create(wb));
-                    enc.Save(ms);
-                    pngBytes = ms.ToArray();
+                    using var pr = docReader.GetPageReader(i);
+                    int bw = pr.GetPageWidth();
+                    int bh = pr.GetPageHeight();
+                    if (bw <= 0 || bh <= 0) continue;
+
+                    var raw = pr.GetImage();
+                    if (raw is null || raw.Length == 0) continue;
+
+                    var wb = new WriteableBitmap(bw, bh, 96, 96, PixelFormats.Bgra32, null);
+                    wb.WritePixels(new Int32Rect(0, 0, bw, bh), raw, bw * 4, 0);
+                    wb.Freeze();
+
+                    byte[] pngBytes;
+                    using (var ms = new System.IO.MemoryStream())
+                    {
+                        var enc = new PngBitmapEncoder();
+                        enc.Frames.Add(BitmapFrame.Create(wb));
+                        enc.Save(ms);
+                        pngBytes = ms.ToArray();
+                    }
+
+                    // Build the page at correct aspect ratio scaled to A4-ish width.
+                    double pageW = 595.28;
+                    double pageH = pageW * bh / bw;
+
+                    var page = newDoc.AddPage();
+                    page.Width  = XUnit.FromPoint(pageW);
+                    page.Height = XUnit.FromPoint(pageH);
+
+                    using var gfx = XGraphics.FromPdfPage(page);
+                    var xImg = XImage.FromStream(() => new System.IO.MemoryStream(pngBytes));
+                    gfx.DrawImage(xImg, 0, 0, pageW, pageH);
                 }
 
-                // Build the page at correct aspect ratio scaled to A4-ish width.
-                double pageW = 595.28;
-                double pageH = pageW * bh / bw;
+                if (newDoc.PageCount == 0) return null;
 
-                var page = newDoc.AddPage();
-                page.Width  = XUnit.FromPoint(pageW);
-                page.Height = XUnit.FromPoint(pageH);
-
-                using var gfx = XGraphics.FromPdfPage(page);
-                var xImg = XImage.FromStream(() => new System.IO.MemoryStream(pngBytes));
-                gfx.DrawImage(xImg, 0, 0, pageW, pageH);
+                var repairedPath = App.MakeTempFile("repaired");
+                newDoc.Save(repairedPath);
+                newDoc.Close();
+                return repairedPath;
             }
-
-            if (newDoc.PageCount == 0)
-                throw new InvalidOperationException("PDFium rendered 0 usable pages.");
-
-            var repairedPath = App.MakeTempFile("repaired");
-            newDoc.Save(repairedPath);
-            newDoc.Close();
-
-            if (_doc is not null) { _doc.Close(); _doc = null; }
-            _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
-            _currentFile = repairedPath;
-            FinishOpenFile(path, repairedPath);
-            MarkDirty(true); // repaired copy lives in temp — user must Save As
-            SetStatus(string.Format(Loc("Str_OpenedRasterRepair"), System.IO.Path.GetFileName(path), _doc.PageCount));
-            KillerDialog.Show(this,
-                $"\"{System.IO.Path.GetFileName(path)}\" was repaired by rasterizing through PDFium.\n\nText is not selectable in the repaired copy. Use Save As to write it to a new location.",
-                "KillerPDF", MessageBoxButton.OK, MessageBoxImage.None);
+            catch { return null; }
         }
 
         private static bool IsOwnerPasswordException(Exception ex) =>
@@ -1248,10 +1906,12 @@ namespace KillerPDF
             _renderDims.Clear();
             _formTextValues.Clear();
             _formCheckValues.Clear();
+            _formFontSizes.Clear();
             _formRadioValues.Clear();
             _allSearchRects.Clear();
             _searchResultPages.Clear();
             _searchPageCursor = -1;
+            _gridScrollToPage = -1;
             ClearSecondaryPages();
             ClearSelection();
             RefreshPageList();
@@ -1546,8 +2206,10 @@ namespace KillerPDF
             _secondaryRenderCts = new System.Threading.CancellationTokenSource();
             var cts = _secondaryRenderCts;
 
-            // Secondary pages: fixed 1536 px cap regardless of DPI/zoom.
-            const int SecondaryMax = 1536;
+            // Secondary pages: 1536 px base, scaled up for high-DPI displays so grid / two-page text
+            // stays crisp on 150%/200% screens (capped at 3072 to keep memory in check). Stays 1536
+            // at 100% DPI, so standard displays are unaffected.
+            int SecondaryMax = (int)Math.Min(3072, 1536 * Math.Max(1.0, VisualTreeHelper.GetDpi(this).DpiScaleX));
             // Grid shows the whole document; Two-Page shows one secondary; other modes peek ahead.
             int limit = _viewMode == ViewMode.Grid
                 ? _doc.PageCount
@@ -1640,12 +2302,28 @@ namespace KillerPDF
                                     && list.Any(a => HitTestAnnotation(a, hit, out _)))
                                    || _selectedAnnotation?.PageIndex == capturedPi;
                     if (onAnnot) Canvas_MouseLeftButtonDown(s, ev);
-                    else PageList.SelectedIndex = capturedPi;
+                    // Selecting the page reflows the Two-Page pair (looks like the doc "advances"),
+                    // so don't change the selection on an empty click of a secondary tile there.
+                    else if (_viewMode != ViewMode.TwoPage) PageList.SelectedIndex = capturedPi;
                 }
                 else Canvas_MouseLeftButtonDown(s, ev);
             };
             overlay.MouseMove                += Canvas_MouseMove;
             overlay.PreviewMouseLeftButtonUp += Canvas_MouseLeftButtonUp;
+            // Right-click on a tile selects that page and opens the same context menu the primary
+            // page uses (per-page overlays don't inherit _annotationCanvas's ContextMenu).
+            overlay.PreviewMouseRightButtonUp += (s, ev) =>
+            {
+                // Don't change the selected page in Two-Page view - it would reflow the pair and
+                // drop to a single page. Grid is anchored at page 0 and Continuous just scrolls.
+                if (_viewMode != ViewMode.TwoPage) PageList.SelectedIndex = capturedPi;
+                if (_annotationCanvas.ContextMenu is ContextMenu cm)
+                {
+                    cm.PlacementTarget = (UIElement)s;
+                    cm.IsOpen = true;
+                    ev.Handled = true;
+                }
+            };
             _continuousCanvases[pi] = overlay;
 
             var pageGrid = new Grid();
@@ -1653,14 +2331,37 @@ namespace KillerPDF
             pageGrid.Children.Add(overlay);
             AddSecondaryPageLinks(pi, pageGrid, pageDipW, pageDipH);
 
-            _pageContentPanel.Children.Add(new Border
+            var tile = new Border
             {
                 Background = Brushes.White,
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 0, 12, 12),
                 Child = pageGrid
-            });
+            };
+            _pageContentPanel.Children.Add(tile);
             RenderAllAnnotations(pi);
+
+            // Grid tiles render asynchronously, so a "scroll to page N" requested when entering grid
+            // can't run until page N's tile exists. Do it the moment that tile streams in.
+            if (pi == _gridScrollToPage)
+            {
+                _gridScrollToPage = -1;
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+                    (Action)(() =>
+                    {
+                        if (_viewMode != ViewMode.Grid) return;
+                        try
+                        {
+                            // Top-align the page's row in the viewport (accounts for the zoom transform).
+                            if (PagePreviewPanel.Content is FrameworkElement content)
+                                PagePreviewPanel.ScrollToVerticalOffset(
+                                    tile.TransformToVisual(content).Transform(new Point(0, 0)).Y);
+                            else
+                                tile.BringIntoView();
+                        }
+                        catch { tile.BringIntoView(); }
+                    }));
+            }
         }
 
         /// <summary>Look up a localized string. Falls back to the key name if missing.</summary>
@@ -1832,6 +2533,8 @@ namespace KillerPDF
 
                 // Right-click context menu: remove the native PDF annotation or copy the URL.
                 var cm = new ContextMenu();
+                TextOptions.SetTextFormattingMode(cm, TextFormattingMode.Display);
+                TextOptions.SetTextRenderingMode(cm, TextRenderingMode.Grayscale);
                 if (lnk.Tag is string uriTag && uriTag.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
                     cm.Items.Add(MakeMenuItem("Copy Email Address", (_, _) =>
                         Clipboard.SetText(uriTag["mailto:".Length..])));
@@ -1958,7 +2661,9 @@ namespace KillerPDF
             string OnValue,       // radio/checkbox on-state value (e.g. "/Yes")
             bool   IsReadOnly,
             double Cx, double Cy, double Cw, double Ch,
-            List<string> Options);
+            List<string> Options,
+            double DaFontPt,   // font size from the field's /DA (points); 0 = auto-size
+            double Scale);     // canvas units per PDF point, for converting DaFontPt to canvas size
 
         /// <summary>
         /// Scans the current page's /Annots for Widget subtypes and overlays interactive
@@ -1969,18 +2674,25 @@ namespace KillerPDF
             if (_doc is null || _currentFile is null) return;
             if (pageIndex >= _doc.PageCount) return;
 
+            // Render onto the page's OWN surface: the per-page overlay used by continuous / grid /
+            // two-page views, or the single-page canvas otherwise. Previously this always used the
+            // single-page canvas, so interactive fields only appeared in Single Page view.
+            var canvas = _continuousCanvases.TryGetValue(pageIndex, out var pageCanvas) ? pageCanvas : _annotationCanvas;
+
             // Remove stale overlays without wiping the entire canvas.
-            for (int i = _annotationCanvas.Children.Count - 1; i >= 0; i--)
-                if (_annotationCanvas.Children[i] is FrameworkElement fe && fe.Tag as string == FormOverlayTag)
-                    _annotationCanvas.Children.RemoveAt(i);
+            for (int i = canvas.Children.Count - 1; i >= 0; i--)
+                if (canvas.Children[i] is FrameworkElement fe && fe.Tag as string == FormOverlayTag)
+                    canvas.Children.RemoveAt(i);
 
             var fields = GetPageFormFields(pageIndex, canvasW, canvasH);
             if (fields.Count == 0) return;
 
-            var green      = Color.FromRgb(0x4a, 0xde, 0x80);
-            var greenBrush = new SolidColorBrush(green);
-            var darkBrush  = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22));
-            var fieldBg    = new SolidColorBrush(Color.FromArgb(200, 255, 253, 231));
+            // Focus highlight (accent). Fields are NOT outlined at rest - the page's own field boxes
+            // already show where to type - so we only tint a faint fill and show the accent on focus,
+            // matching how Chrome/Brave render fields instead of drawing a green line around each one.
+            var fieldBorder = new SolidColorBrush(Color.FromArgb(0x55, 0x88, 0x88, 0x88)); // faint gray, check/radio only
+            var darkBrush   = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22));
+            var fieldBg     = new SolidColorBrush(Color.FromArgb(200, 255, 253, 231));
 
             // Collect radio buttons per group so we can wire mutual exclusion after the loop.
             var radioGroups = new Dictionary<string, List<(Ellipse dot, string onVal)>>();
@@ -1994,13 +2706,20 @@ namespace KillerPDF
                 if (!f.IsCheckBox && !f.IsRadio && f.FieldType != "/Ch")
                 {
                     string cur     = _formTextValues.TryGetValue(f.ObjNum, out var tv) ? tv : f.CurrentValue;
-                    // Use the shorter canvas dimension as the font size reference so that
-                    // rotated fields (where Cw and Ch are swapped vs. portrait) don't blow up.
-                    double fieldShort = Math.Min(f.Cw, f.Ch);
-                    double fontSize = f.IsMultiLine
-                        ? fieldShort * 0.18
-                        : fieldShort * 0.65;
-                    fontSize = Math.Max(10, fontSize);
+                    // Size text the way the field intends: use its /DA font size when one is given;
+                    // otherwise auto-size - single-line fits the box height (capped so a tall field
+                    // isn't giant), multi-line uses a steady readable size rather than shrinking with
+                    // the box. This replaces the old box-height guess that made fields huge or tiny.
+                    double fontSize;
+                    if (_formFontSizes.TryGetValue(f.ObjNum, out var userPt) && userPt > 0 && f.Scale > 0)
+                        fontSize = userPt * f.Scale;          // user override (the new per-field size control)
+                    else if (f.DaFontPt > 0.5 && f.Scale > 0)
+                        fontSize = f.DaFontPt * f.Scale;
+                    else if (f.IsMultiLine)
+                        fontSize = f.Scale > 0 ? 11.5 * f.Scale : Math.Max(11, Math.Min(f.Cw, f.Ch) * 0.5);
+                    else
+                        fontSize = f.Scale > 0 ? Math.Min(f.Ch * 0.62, 15 * f.Scale) : f.Ch * 0.62;
+                    fontSize = Math.Max(9, Math.Min(fontSize, 400));
                     var tb = new TextBox
                     {
                         Tag              = FormOverlayTag,
@@ -2015,7 +2734,9 @@ namespace KillerPDF
                         Background       = fieldBg,
                         Foreground       = Brushes.Black,
                         CaretBrush       = Brushes.Black,
-                        BorderBrush      = greenBrush,
+                        SelectionBrush   = (System.Windows.Media.Brush)FindResource("HeaderAccent"),
+                        Style            = (Style)FindResource("FormFieldTextBox"),
+                        BorderBrush      = Brushes.Transparent,
                         BorderThickness  = new Thickness(1),
                         FontSize         = fontSize,
                         Padding          = new Thickness(3, 0, 3, 0),
@@ -2023,10 +2744,12 @@ namespace KillerPDF
                             ? VerticalAlignment.Top : VerticalAlignment.Center,
                         ToolTip          = string.IsNullOrEmpty(f.FieldName) ? null : f.FieldName,
                     };
-                    // Highlight border on focus so users can see which field is active.
-                    tb.GotFocus  += (_, _) => tb.BorderBrush = new SolidColorBrush(Color.FromRgb(0x22, 0xc5, 0x5e));
-                    tb.LostFocus += (_, _) => tb.BorderBrush = greenBrush;
-                    int capturedKey = f.ObjNum;
+                    // No outline at rest (the page already shows the field box); accent only on focus.
+                    // Focus also raises the per-field font-size stepper (and hides it on blur).
+                    int    capturedKey   = f.ObjNum;
+                    double capturedScale = f.Scale;
+                    tb.GotFocus  += (_, _) => { tb.SetResourceReference(Control.BorderBrushProperty, "HeaderAccent"); ShowFormSizeBar(tb, capturedKey, capturedScale); };
+                    tb.LostFocus += (_, _) => { tb.BorderBrush = Brushes.Transparent; HideFormSizeBar(); };
                     tb.TextChanged += (_, _) => { _formTextValues[capturedKey] = tb.Text; MarkDirty(true); };
                     ctrl = tb;
                 }
@@ -2042,7 +2765,9 @@ namespace KillerPDF
                         Height    = f.Ch,
                         IsEnabled = !f.IsReadOnly,
                         Foreground = Brushes.Black,
-                        FontSize  = Math.Max(10, Math.Min(f.Cw, f.Ch) * 0.65),
+                        FontSize  = f.DaFontPt > 0.5 && f.Scale > 0
+                            ? f.DaFontPt * f.Scale
+                            : Math.Min(Math.Max(10, f.Ch * 0.55), 16),
                         ToolTip   = string.IsNullOrEmpty(f.FieldName) ? null : f.FieldName,
                     };
                     foreach (var opt in f.Options) combo.Items.Add(opt);
@@ -2081,7 +2806,7 @@ namespace KillerPDF
                         Width           = f.Cw,
                         Height          = f.Ch,
                         Background      = fieldBg,
-                        BorderBrush     = greenBrush,
+                        BorderBrush     = fieldBorder,
                         BorderThickness = new Thickness(1.5),
                         CornerRadius    = new CornerRadius(2),
                         Cursor          = f.IsReadOnly ? Cursors.Arrow : Cursors.Hand,
@@ -2126,7 +2851,7 @@ namespace KillerPDF
                     {
                         Width           = size,
                         Height          = size,
-                        Stroke          = greenBrush,
+                        Stroke          = fieldBorder,
                         StrokeThickness = 1.5,
                         Fill            = fieldBg,
                         HorizontalAlignment = HorizontalAlignment.Center,
@@ -2173,7 +2898,7 @@ namespace KillerPDF
                 if (ctrl is null) continue;
                 Canvas.SetLeft(ctrl, f.Cx);
                 Canvas.SetTop(ctrl, f.Cy);
-                _annotationCanvas.Children.Add(ctrl);
+                canvas.Children.Add(ctrl);
                 anyField = true;
             }
 
@@ -2191,12 +2916,18 @@ namespace KillerPDF
             if (_doc is null || pageIndex >= _doc.PageCount) return result;
 
             var page = _doc.Pages[pageIndex];
-            // Use the MediaBox directly — PdfSharpCore swaps page.Width/Height for 90°/270°
-            // rotated pages to return visual dimensions, but field /Rect coords are always
-            // in the unrotated MediaBox coordinate space.
+            // PDFium renders the CropBox (falling back to the MediaBox when there is no crop), so
+            // field /Rect coordinates must be mapped relative to THAT box's origin and size - not
+            // assumed to start at (0,0) with MediaBox dimensions. Pages whose box origin is offset,
+            // or whose CropBox is inset from the MediaBox, otherwise shift every field a little;
+            // mapping to the rendered box's own origin lines them up the way Acrobat/Chrome do.
             var mediaBox = page.MediaBox;
-            double pageW = mediaBox.Width  > 0 ? mediaBox.Width  : 595.28;
-            double pageH = mediaBox.Height > 0 ? mediaBox.Height : 841.89;
+            var cropBox  = page.CropBox;
+            var box      = (cropBox.Width > 1 && cropBox.Height > 1) ? cropBox : mediaBox;
+            double boxX  = box.X1;   // box lower-left origin in PDF user space
+            double boxY  = box.Y1;
+            double pageW = box.Width  > 0 ? box.Width  : 595.28;
+            double pageH = box.Height > 0 ? box.Height : 841.89;
             int rotation = ((page.Rotate % 360) + 360) % 360;
 
             try
@@ -2223,6 +2954,11 @@ namespace KillerPDF
                     if (rx1 > rx2) (rx1, rx2) = (rx2, rx1);
                     if (ry1 > ry2) (ry1, ry2) = (ry2, ry1);
 
+                    // Field rect relative to the rendered box's lower-left origin, so an offset
+                    // MediaBox/CropBox doesn't push the field off its drawn box.
+                    double fx1 = rx1 - boxX, fy1 = ry1 - boxY;
+                    double fx2 = rx2 - boxX, fy2 = ry2 - boxY;
+
                     // Map PDF rect (bottom-left origin, unrotated) to canvas coords.
                     // The canvas matches the Docnet-rendered bitmap which has already applied
                     // the page rotation, so we must transform accordingly.
@@ -2231,30 +2967,30 @@ namespace KillerPDF
                     {
                         case 90: // 90° CW: bottom→left, left→top; canvas is pageH-wide × pageW-tall
                             // (px,py) → canvas (py, px)
-                            cx = ry1             / pageH * canvasW;
-                            cy = rx1             / pageW * canvasH;
-                            cw = (ry2 - ry1)     / pageH * canvasW;
-                            ch = (rx2 - rx1)     / pageW * canvasH;
+                            cx = fy1             / pageH * canvasW;
+                            cy = fx1             / pageW * canvasH;
+                            cw = (fy2 - fy1)     / pageH * canvasW;
+                            ch = (fx2 - fx1)     / pageW * canvasH;
                             break;
                         case 180: // 180°: both axes flipped
                             // (px,py) → canvas (pageW-px, py)
-                            cx = (pageW - rx2)   / pageW * canvasW;
-                            cy = ry1             / pageH * canvasH;
-                            cw = (rx2 - rx1)     / pageW * canvasW;
-                            ch = (ry2 - ry1)     / pageH * canvasH;
+                            cx = (pageW - fx2)   / pageW * canvasW;
+                            cy = fy1             / pageH * canvasH;
+                            cw = (fx2 - fx1)     / pageW * canvasW;
+                            ch = (fy2 - fy1)     / pageH * canvasH;
                             break;
                         case 270: // 270° CW (= 90° CCW): bottom→right, right→top; canvas is pageH-wide × pageW-tall
                             // (px,py) → canvas (pageH-py, pageW-px)
-                            cx = (pageH - ry2)   / pageH * canvasW;
-                            cy = (pageW - rx2)   / pageW * canvasH;
-                            cw = (ry2 - ry1)     / pageH * canvasW;
-                            ch = (rx2 - rx1)     / pageW * canvasH;
+                            cx = (pageH - fy2)   / pageH * canvasW;
+                            cy = (pageW - fx2)   / pageW * canvasH;
+                            cw = (fy2 - fy1)     / pageH * canvasW;
+                            ch = (fx2 - fx1)     / pageW * canvasH;
                             break;
                         default: // 0° — standard bottom-left PDF → top-left canvas
-                            cx = rx1             / pageW * canvasW;
-                            cy = (pageH - ry2)   / pageH * canvasH;
-                            cw = (rx2 - rx1)     / pageW * canvasW;
-                            ch = (ry2 - ry1)     / pageH * canvasH;
+                            cx = fx1             / pageW * canvasW;
+                            cy = (pageH - fy2)   / pageH * canvasH;
+                            cw = (fx2 - fx1)     / pageW * canvasW;
+                            ch = (fy2 - fy1)     / pageH * canvasH;
                             break;
                     }
                     if (cw < 2 || ch < 2) continue;
@@ -2263,6 +2999,7 @@ namespace KillerPDF
                     string ft     = "";
                     string name   = "";
                     string curVal = "";
+                    string da     = "";   // default appearance string (holds the field's font size)
                     int    flags  = 0;
                     var    options = new List<string>();
 
@@ -2278,6 +3015,8 @@ namespace KillerPDF
                             var vElem = node.Elements["/V"];
                             curVal = vElem is PdfString vs ? vs.Value : vElem?.ToString() ?? "";
                         }
+                        if (string.IsNullOrEmpty(da) && node.Elements["/DA"] is PdfString das)
+                            da = das.Value;
                         if (flags == 0 && node.Elements["/Ff"] is PdfInteger fi)
                             flags = fi.Value;
                         if (options.Count == 0 && node.Elements.GetArray("/Opt") is PdfArray optArr)
@@ -2322,13 +3061,34 @@ namespace KillerPDF
                     if (objNum < 0)
                         objNum = -(pageIndex * 10000 + i); // synthetic key for inline dicts
 
+                    // Font size the field asks for (points) and the page's render scale, so the
+                    // overlay can size text the way the form intends rather than guessing from the
+                    // box height (which made tall fields huge and others shrink).
+                    double daFontPt = ParseDaFontSize(da);
+                    double fScale   = (rotation == 90 || rotation == 270)
+                        ? canvasH / pageW : canvasH / pageH;
+
                     result.Add(new FormFieldInfo(objNum, ft, isCheckBox, isRadio, isMultiLine,
-                        name, curVal, onValue, isReadOnly, cx, cy, cw, ch, options));
+                        name, curVal, onValue, isReadOnly, cx, cy, cw, ch, options, daFontPt, fScale));
                 }
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"GetPageFormFields: {ex}"); }
 
             return result;
+        }
+
+        // Parses the font size (points) from a PDF /DA default-appearance string, e.g.
+        // "/Helv 11 Tf 0 g" -> 11. Returns 0 when the size is "auto" (0) or there's no Tf operator.
+        private static double ParseDaFontSize(string da)
+        {
+            if (string.IsNullOrWhiteSpace(da)) return 0;
+            var t = da.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 1; i < t.Length; i++)
+                if (t[i] == "Tf" && double.TryParse(t[i - 1],
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out double sz) && sz > 0)
+                    return sz;
+            return 0;
         }
 
         /// <summary>
@@ -2396,6 +3156,13 @@ namespace KillerPDF
                         if (_formTextValues.TryGetValue(objNum, out var textVal) && fieldDict is not null)
                         {
                             fieldDict.Elements["/V"] = new PdfString(textVal);
+                            // Bake a per-field font-size override (from the size stepper) into the
+                            // field's /DA so the saved appearance and any later editor use it.
+                            if (_formFontSizes.TryGetValue(objNum, out var ovPt) && ovPt > 0)
+                            {
+                                daStr = WithDaFontSize(daStr, ovPt);
+                                fieldDict.Elements["/DA"] = new PdfString(daStr);
+                            }
                             GenerateTextFieldAppearance(ann, textVal, daStr, fieldW, fieldH);
                         }
                         else if (_formCheckValues.TryGetValue(objNum, out var checkVal) && fieldDict is not null)
@@ -2897,6 +3664,8 @@ namespace KillerPDF
         {
             EditTool.Text => Cursors.IBeam,
             EditTool.Highlight => Cursors.Cross,
+            EditTool.Strikethrough => Cursors.Cross,
+            EditTool.Underline => Cursors.Cross,
             EditTool.Draw => Cursors.Pen,
             EditTool.Signature => Cursors.Pen,
             EditTool.Image => Cursors.Hand,
@@ -2916,6 +3685,8 @@ namespace KillerPDF
                 (_toolSelectBtn, EditTool.Select),
                 (_toolTextBtn, EditTool.Text),
                 (_toolHighlightBtn, EditTool.Highlight),
+                (_toolStrikeBtn, EditTool.Strikethrough),
+                (_toolUnderlineBtn, EditTool.Underline),
                 (_toolDrawBtn, EditTool.Draw),
                 (_toolSignatureBtn, EditTool.Signature),
                 (_toolImageBtn, EditTool.Image),
@@ -2930,8 +3701,10 @@ namespace KillerPDF
                 }
                 else
                 {
-                    btn.Background = Brushes.Transparent;
-                    btn.SetResourceReference(Control.ForegroundProperty, "TextPrimary");
+                    // Clear local values so the ToolbarButton style (incl. its hover trigger) applies.
+                    // Setting Background locally here would override the style and kill the hover.
+                    btn.ClearValue(Control.BackgroundProperty);
+                    btn.ClearValue(Control.ForegroundProperty);
                 }
             }
 
@@ -2945,7 +3718,8 @@ namespace KillerPDF
                 overlay.Cursor = toolCursor;
 
             // Show/hide draw settings bar
-            if (tool == EditTool.Draw || tool == EditTool.Highlight)
+            if (tool == EditTool.Draw || tool == EditTool.Highlight
+                || tool == EditTool.Strikethrough || tool == EditTool.Underline)
                 ShowDrawSettings(tool);
             else
                 HideDrawSettings();
@@ -2981,11 +3755,11 @@ namespace KillerPDF
                     else
                         _savedPagesWidth = Math.Min(_sidebarCol.ActualWidth, SidebarMaxPages);
                 }
+                _sidebarToggleBtn.Content = "\uE76C"; // ChevronRight (Segoe MDL2)
+                _sidebarToggleBtn.ToolTip = Loc("Str_TT_ExpandSidebar");
                 _sidebarBorder.Visibility = Visibility.Collapsed;
                 _sidebarCol.Width = new GridLength(24);
                 _sidebarCol.MinWidth = 24;
-                _sidebarToggleBtn.Content = "\uE76C"; // ChevronRight (Segoe MDL2)
-                _sidebarToggleBtn.ToolTip = Loc("Str_TT_ExpandSidebar");
             }
             else
             {
@@ -3113,6 +3887,14 @@ namespace KillerPDF
             }
         }
 
+        // The TreeView's own scroll viewer swallows the wheel before the outer one sees it, so the
+        // Outlines list wouldn't scroll. Forward the wheel to the outer scroll viewer.
+        private void OutlineScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            OutlineScrollViewer.ScrollToVerticalOffset(OutlineScrollViewer.VerticalOffset - e.Delta);
+            e.Handled = true;
+        }
+
         private void LoadOutlines()
         {
             _outlinesFitted = false;   // triggers auto-fit on next tab switch
@@ -3167,6 +3949,8 @@ namespace KillerPDF
         private void ToolSelect_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Select);
         private void ToolText_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Text);
         private void ToolHighlight_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Highlight);
+        private void ToolStrike_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Strikethrough);
+        private void ToolUnderline_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Underline);
         private void ToolDraw_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Draw);
         private void ToolImage_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Image);
         private void ToolCrop_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Crop);
@@ -3866,6 +4650,106 @@ namespace KillerPDF
             return freezable;
         }
 
+        // Wraps a floating annotation bar's content with the app's film-grain layer so these bars
+        // carry the same texture as the Settings / signature / dialog surfaces. The grain extends
+        // under the host border's 4px padding (negative margin) and matches its bottom corners.
+        private Grid GrainWrap(UIElement content)
+        {
+            var g = new Grid();
+            g.Children.Add(new Border
+            {
+                CornerRadius     = new CornerRadius(0, 0, 4, 4),
+                Margin           = new Thickness(-4),
+                IsHitTestVisible = false,
+                Opacity          = (double)FindResource("GrainOpacity"),
+                Background       = (System.Windows.Media.Brush)FindResource("GrainBrushShared")
+            });
+            g.Children.Add(content);
+            return g;
+        }
+
+        // A grab handle (vertical dots) placed at the left of an annotation bar so it can be slid
+        // left/right along the top of the document. Returns the handle for EnableBarSlide.
+        private Border MakeBarGrip()
+        {
+            return new Border
+            {
+                Background        = Brushes.Transparent,
+                Cursor            = Cursors.SizeWE,
+                Padding           = new Thickness(2, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Child = new TextBlock
+                {
+                    Text              = "⠇",   // vertical dots, a drag grip
+                    FontSize          = 14,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Foreground        = (SolidColorBrush)FindResource("TextSecondary")
+                }
+            };
+        }
+
+        // Lets the annotation bars slide horizontally along the top via their grip, clamped inside
+        // the document area, with the X position remembered (shared across the draw/text bars).
+        private void EnableBarSlide(FrameworkElement grip, Border bar, FrameworkElement bounds)
+        {
+            grip.MouseLeftButtonDown += (s, e) =>
+            {
+                bar.Tag = (e.GetPosition(bounds).X, bar.Margin.Left);   // (startX, origLeft)
+                grip.CaptureMouse();
+                e.Handled = true;
+            };
+            grip.MouseMove += (s, e) =>
+            {
+                if (bar.Tag is not (double startX, double origLeft) || !grip.IsMouseCaptured) return;
+                double nl = origLeft + (e.GetPosition(bounds).X - startX);
+                double maxL = Math.Max(0, bounds.ActualWidth - (bar.ActualWidth > 0 ? bar.ActualWidth : 0));
+                nl = Math.Max(0, Math.Min(maxL, nl));
+                bar.Margin = new Thickness(nl, bar.Margin.Top, 0, 0);
+            };
+            grip.MouseLeftButtonUp += (s, e) =>
+            {
+                if (!grip.IsMouseCaptured) return;
+                grip.ReleaseMouseCapture();
+                _annotBarLeft = bar.Margin.Left;
+                App.SetSetting("AnnotBarLeft", ((int)bar.Margin.Left).ToString());
+                e.Handled = true;
+            };
+        }
+
+        // Remembered slide position so a rebuilt bar (on tool/swatch change) lands instantly in the
+        // same spot - no deferred reposition, so no flash/blink.
+        private double? _annotBarLeft;
+
+        // Positions an annotation bar and wires up sliding. If we already know the X (this session or
+        // saved), set it synchronously so the bar appears in place; only the very first time do we
+        // defer to compute the default top-right from the laid-out width.
+        private void PlaceAnnotationBar(Border bar, Border grip)
+        {
+            if (PagePreviewPanel.Parent is not Grid area) return;
+
+            double? known = _annotBarLeft;
+            if (known is null && int.TryParse(App.GetSetting("AnnotBarLeft"), out int sl)) known = sl;
+
+            if (known is double k)
+            {
+                bar.Margin = new Thickness(Math.Max(0, k), bar.Margin.Top, 0, 0);
+                EnableBarSlide(grip, bar, area);
+                return;
+            }
+
+            // First placement only: default to the top-right once the width is known.
+            bar.Opacity = 0;
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
+            {
+                double w = bar.ActualWidth;
+                double left = Math.Max(0, area.ActualWidth - w - 8);
+                bar.Margin = new Thickness(left, bar.Margin.Top, 0, 0);
+                bar.Opacity = 1;
+                _annotBarLeft = left;
+                EnableBarSlide(grip, bar, area);
+            }));
+        }
+
         private void ShowDrawSettings(EditTool tool)
         {
             if (_drawSettingsBar is not null)
@@ -3876,6 +4760,10 @@ namespace KillerPDF
             }
 
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 4, 8, 4) };
+
+            // Drag grip so the bar can be slid left/right along the top.
+            var drawGrip = MakeBarGrip();
+            panel.Children.Add(drawGrip);
 
             // Color label
             var colorLbl = new TextBlock
@@ -3888,7 +4776,10 @@ namespace KillerPDF
             panel.Children.Add(colorLbl);
 
             // Color swatches
-            var activeColor = tool == EditTool.Draw ? _drawColor : Color.FromRgb(_highlightColor.R, _highlightColor.G, _highlightColor.B);
+            bool isLineTool = tool == EditTool.Strikethrough || tool == EditTool.Underline;
+            var activeColor = tool == EditTool.Draw ? _drawColor
+                            : isLineTool ? Color.FromRgb(_lineAnnotColor.R, _lineAnnotColor.G, _lineAnnotColor.B)
+                            : Color.FromRgb(_highlightColor.R, _highlightColor.G, _highlightColor.B);
             foreach (var color in SwatchColors)
             {
                 bool isActive = color == activeColor;
@@ -3911,6 +4802,8 @@ namespace KillerPDF
                     var c = (Color)((Border)s!).Tag;
                     if (tool == EditTool.Draw)
                         _drawColor = Color.FromArgb(_drawOpacity, c.R, c.G, c.B);
+                    else if (isLineTool)
+                        _lineAnnotColor = Color.FromArgb(_lineAnnotColor.A, c.R, c.G, c.B);
                     else
                         _highlightColor = Color.FromArgb(_highlightColor.A, c.R, c.G, c.B);
                     ShowDrawSettings(tool); // refresh selection
@@ -3939,7 +4832,8 @@ namespace KillerPDF
                 {
                     Minimum = 1, Maximum = 20, Value = _drawWidth,
                     Width = 80, VerticalAlignment = VerticalAlignment.Center,
-                    TickFrequency = 1, IsSnapToTickEnabled = true
+                    TickFrequency = 1, IsSnapToTickEnabled = true,
+                    Style = (Style)FindResource("DarkSlider")
                 };
                 sizeSlider.ValueChanged += (s, e) => _drawWidth = e.NewValue;
                 panel.Children.Add(sizeSlider);
@@ -3948,7 +4842,8 @@ namespace KillerPDF
                 {
                     Text = $"{_drawWidth:F0}px",
                     FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
-                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0)
+                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0),
+                    Width = 34, TextAlignment = TextAlignment.Right
                 };
                 sizeLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
                 sizeSlider.ValueChanged += (s, e) => sizeLabel.Text = $"{e.NewValue:F0}px";
@@ -3969,17 +4864,19 @@ namespace KillerPDF
             opacityLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
             panel.Children.Add(opacityLbl);
 
-            byte currentOpacity = tool == EditTool.Draw ? _drawOpacity : _highlightColor.A;
+            byte currentOpacity = tool == EditTool.Draw ? _drawOpacity : isLineTool ? _lineAnnotColor.A : _highlightColor.A;
             var opacitySlider = new Slider
             {
                 Minimum = 10, Maximum = 255, Value = currentOpacity,
-                Width = 80, VerticalAlignment = VerticalAlignment.Center
+                Width = 80, VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("DarkSlider")
             };
             var opacityLabel = new TextBlock
             {
                 Text = $"{(int)(currentOpacity / 255.0 * 100)}%",
                 FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0)
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0),
+                Width = 34, TextAlignment = TextAlignment.Right
             };
             opacityLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
             opacitySlider.ValueChanged += (s, e) =>
@@ -3990,6 +4887,10 @@ namespace KillerPDF
                 {
                     _drawOpacity = a;
                     _drawColor = Color.FromArgb(a, _drawColor.R, _drawColor.G, _drawColor.B);
+                }
+                else if (isLineTool)
+                {
+                    _lineAnnotColor = Color.FromArgb(a, _lineAnnotColor.R, _lineAnnotColor.G, _lineAnnotColor.B);
                 }
                 else
                 {
@@ -4002,12 +4903,13 @@ namespace KillerPDF
             _drawSettingsBar = new Border
             {
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                HorizontalAlignment = HorizontalAlignment.Right,
+                HorizontalAlignment = HorizontalAlignment.Left,   // slid along the top via the grip
                 VerticalAlignment = VerticalAlignment.Top,
                 CornerRadius = new CornerRadius(0, 0, 4, 4),
                 Padding = new Thickness(4),
-                Child = panel,
-                Margin = new Thickness(0, 0, 8, 0)
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 16, ShadowDepth = 3, Direction = 270, Opacity = 0.55 },
+                Child = GrainWrap(panel),
+                Margin = new Thickness(0, 0, 0, 0)
             };
             _drawSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgPanel");
             _drawSettingsBar.SetResourceReference(Border.BorderBrushProperty, "BorderDim");
@@ -4017,6 +4919,7 @@ namespace KillerPDF
             {
                 Panel.SetZIndex(_drawSettingsBar, 100);
                 previewArea.Children.Add(_drawSettingsBar);
+                PlaceAnnotationBar(_drawSettingsBar, drawGrip);
             }
         }
 
@@ -4033,8 +4936,6 @@ namespace KillerPDF
         // ============================================================
         // Text tool settings bar
         // ============================================================
-
-        private static readonly double[] TextFontSizes = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 64, 72];
 
         private void ApplyTextStyleToActiveBox()
         {
@@ -4054,51 +4955,12 @@ namespace KillerPDF
         {
             HideTextSettings();
 
+            // Mirror the Draw bar exactly (Color | Size | Opacity) so the two read as one family.
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 4, 8, 4) };
 
-            // Font size label
-            var sizeLbl = new TextBlock
-            {
-                Text = "Size:",
-                FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
-            };
-            sizeLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-            panel.Children.Add(sizeLbl);
-
-            // Font size dropdown
-            var sizeBox = new ComboBox
-            {
-                Width = 64, Height = 24,
-                Style = (Style)FindResource("DarkComboBox"),
-                IsEditable = true,
-                VerticalContentAlignment = VerticalAlignment.Center,
-            };
-            foreach (var size in TextFontSizes)
-                sizeBox.Items.Add(size.ToString("0"));
-            sizeBox.Text = _textFontSize.ToString("0");
-            sizeBox.SelectionChanged += (_, _) =>
-            {
-                if (sizeBox.SelectedItem is string s && double.TryParse(s, out double v) && v > 0)
-                {
-                    _textFontSize = v;
-                    ApplyTextStyleToActiveBox();
-                }
-            };
-            sizeBox.LostFocus += (_, _) =>
-            {
-                if (double.TryParse(sizeBox.Text, out double v) && v > 0)
-                {
-                    _textFontSize = v;
-                    ApplyTextStyleToActiveBox();
-                }
-            };
-            panel.Children.Add(sizeBox);
-
-            // Separator
-            var sep = new Rectangle { Width = 1, Margin = new Thickness(8, 2, 8, 2) };
-            sep.SetResourceReference(Rectangle.FillProperty, "BorderDim");
-            panel.Children.Add(sep);
+            // Drag grip so the bar can be slid left/right along the top.
+            var textGrip = MakeBarGrip();
+            panel.Children.Add(textGrip);
 
             // Color label
             var colorLbl = new TextBlock
@@ -4128,19 +4990,104 @@ namespace KillerPDF
                     swatch.SetResourceReference(Border.BorderBrushProperty, "Accent");
                 else
                     swatch.BorderBrush = _swatchDimBorder;
-                swatch.MouseLeftButtonDown += (_, _) => { _textColor = c; ApplyTextStyleToActiveBox(); ShowTextSettings(); };
+                swatch.MouseLeftButtonDown += (_, _) =>
+                {
+                    _textColor = Color.FromArgb(_textOpacity, c.R, c.G, c.B);
+                    ApplyTextStyleToActiveBox();
+                    ShowTextSettings();
+                };
                 panel.Children.Add(swatch);
             }
+
+            // Separator
+            var sep1 = new Rectangle { Width = 1, Margin = new Thickness(8, 2, 8, 2) };
+            sep1.SetResourceReference(Rectangle.FillProperty, "BorderDim");
+            panel.Children.Add(sep1);
+
+            // Size slider (points)
+            var sizeLbl = new TextBlock
+            {
+                Text = "Size:",
+                FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
+            };
+            sizeLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+            panel.Children.Add(sizeLbl);
+
+            var sizeSlider = new Slider
+            {
+                Minimum = 8, Maximum = 72, Value = Math.Max(8, Math.Min(72, _textFontSize)),
+                Width = 80, VerticalAlignment = VerticalAlignment.Center,
+                TickFrequency = 1, IsSnapToTickEnabled = true,
+                Style = (Style)FindResource("DarkSlider")
+            };
+            var sizeLabel = new TextBlock
+            {
+                Text = $"{_textFontSize:F0}pt",
+                FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0),
+                Width = 34, TextAlignment = TextAlignment.Right
+            };
+            sizeLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+            sizeSlider.ValueChanged += (s, e) =>
+            {
+                _textFontSize = e.NewValue;
+                sizeLabel.Text = $"{e.NewValue:F0}pt";
+                ApplyTextStyleToActiveBox();
+            };
+            panel.Children.Add(sizeSlider);
+            panel.Children.Add(sizeLabel);
+
+            // Separator
+            var sep2 = new Rectangle { Width = 1, Margin = new Thickness(8, 2, 8, 2) };
+            sep2.SetResourceReference(Rectangle.FillProperty, "BorderDim");
+            panel.Children.Add(sep2);
+
+            // Opacity slider
+            var opacityLbl = new TextBlock
+            {
+                Text = "Opacity:",
+                FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
+            };
+            opacityLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+            panel.Children.Add(opacityLbl);
+
+            var opacitySlider = new Slider
+            {
+                Minimum = 10, Maximum = 255, Value = _textOpacity,
+                Width = 80, VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("DarkSlider")
+            };
+            var opacityLabel = new TextBlock
+            {
+                Text = $"{(int)(_textOpacity / 255.0 * 100)}%",
+                FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0),
+                Width = 34, TextAlignment = TextAlignment.Right
+            };
+            opacityLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+            opacitySlider.ValueChanged += (s, e) =>
+            {
+                byte a = (byte)e.NewValue;
+                opacityLabel.Text = $"{(int)(a / 255.0 * 100)}%";
+                _textOpacity = a;
+                _textColor = Color.FromArgb(a, _textColor.R, _textColor.G, _textColor.B);
+                ApplyTextStyleToActiveBox();
+            };
+            panel.Children.Add(opacitySlider);
+            panel.Children.Add(opacityLabel);
 
             _textSettingsBar = new Border
             {
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                HorizontalAlignment = HorizontalAlignment.Right,
+                HorizontalAlignment = HorizontalAlignment.Left,   // slid along the top via the grip
                 VerticalAlignment = VerticalAlignment.Top,
                 CornerRadius = new CornerRadius(0, 0, 4, 4),
                 Padding = new Thickness(4),
-                Child = panel,
-                Margin = new Thickness(0, 0, 8, 0)
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 16, ShadowDepth = 3, Direction = 270, Opacity = 0.55 },
+                Child = GrainWrap(panel),
+                Margin = new Thickness(0, 0, 0, 0)
             };
             _textSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgPanel");
             _textSettingsBar.SetResourceReference(Border.BorderBrushProperty, "BorderDim");
@@ -4150,6 +5097,7 @@ namespace KillerPDF
             {
                 Panel.SetZIndex(_textSettingsBar, 100);
                 previewArea.Children.Add(_textSettingsBar);
+                PlaceAnnotationBar(_textSettingsBar, textGrip);
             }
         }
 
@@ -4160,6 +5108,115 @@ namespace KillerPDF
                 (PagePreviewPanel.Parent as Grid)?.Children.Remove(_textSettingsBar);
                 _textSettingsBar = null;
             }
+        }
+
+        // ── Form-field font-size stepper ─────────────────────────────────
+        // A small "Field size: - N +" bar shown top-right while a form text field is focused, so the
+        // user can resize that field's text (PDF forms otherwise lock the size to the field's /DA).
+        // The chosen size is stored per field and baked into the field's /DA on save.
+        private void ShowFormSizeBar(TextBox tb, int objNum, double scale)
+        {
+            HideFormSizeBar();
+            _activeFormTb    = tb;
+            _activeFormObj   = objNum;
+            _activeFormScale = scale > 0 ? scale : 1;
+
+            double curPt = Math.Round(_activeFormTb.FontSize / _activeFormScale);
+
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 4, 8, 4) };
+            var lbl = new TextBlock
+            {
+                Text = "Font size:",
+                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
+            };
+            lbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+            panel.Children.Add(lbl);
+
+            var sizeLbl = new TextBlock
+            {
+                Text = curPt.ToString("0"),
+                FontFamily = new FontFamily("Segoe UI"), FontSize = 12,
+                MinWidth = 22, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+            };
+            sizeLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");
+
+            panel.Children.Add(MakeFormSizeStep("", () => AdjustFormFontSize(-1, sizeLbl)));  // minus
+            panel.Children.Add(sizeLbl);
+            panel.Children.Add(MakeFormSizeStep("", () => AdjustFormFontSize(+1, sizeLbl)));  // plus
+
+            _formSizeBar = new Border
+            {
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment   = VerticalAlignment.Top,
+                CornerRadius = new CornerRadius(0, 0, 4, 4),
+                Padding = new Thickness(4),
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 16, ShadowDepth = 3, Direction = 270, Opacity = 0.55 },
+                Margin  = new Thickness(0, 0, 8, 0),
+                Child   = panel,
+            };
+            _formSizeBar.SetResourceReference(Border.BackgroundProperty,  "BgPanel");
+            _formSizeBar.SetResourceReference(Border.BorderBrushProperty, "BorderDim");
+            if (PagePreviewPanel.Parent is Grid g)
+            {
+                Panel.SetZIndex(_formSizeBar, 100);
+                g.Children.Add(_formSizeBar);
+            }
+        }
+
+        // A flat, non-focusable +/- step. It's a Border (not a Button) so clicking it doesn't move
+        // keyboard focus out of the text field, which would otherwise blur the field and dismiss this bar.
+        private Border MakeFormSizeStep(string glyph, Action onClick)
+        {
+            var t = new TextBlock
+            {
+                Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+            };
+            t.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");
+            var b = new Border
+            {
+                Width = 24, Height = 22, CornerRadius = new CornerRadius(3), Cursor = Cursors.Hand,
+                Margin = new Thickness(2, 0, 2, 0), Background = Brushes.Transparent, Child = t
+            };
+            b.MouseEnter += (_, _) => b.SetResourceReference(Border.BackgroundProperty, "BgHover");
+            b.MouseLeave += (_, _) => b.Background = Brushes.Transparent;
+            b.MouseLeftButtonDown += (_, e) => { e.Handled = true; onClick(); };
+            return b;
+        }
+
+        private void AdjustFormFontSize(int delta, TextBlock sizeLbl)
+        {
+            if (_activeFormTb is null) return;
+            double scale = _activeFormScale > 0 ? _activeFormScale : 1;
+            double pt = Math.Round(_activeFormTb.FontSize / scale);
+            pt = Math.Max(4, Math.Min(96, pt + delta));
+            _formFontSizes[_activeFormObj] = pt;
+            _activeFormTb.FontSize = pt * scale;
+            sizeLbl.Text = pt.ToString("0");
+            MarkDirty(true);
+        }
+
+        private void HideFormSizeBar()
+        {
+            if (_formSizeBar is not null)
+            {
+                (PagePreviewPanel.Parent as Grid)?.Children.Remove(_formSizeBar);
+                _formSizeBar = null;
+            }
+        }
+
+        // Returns a /DA default-appearance string with its font size replaced (or a sensible default
+        // when none exists), used to bake a user font-size override into the saved field.
+        private static string WithDaFontSize(string? da, double pt)
+        {
+            string size = pt.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            if (string.IsNullOrWhiteSpace(da)) return $"/Helv {size} Tf 0 g";
+            var t = da!.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).ToList();
+            for (int i = 1; i < t.Count; i++)
+                if (t[i] == "Tf") { t[i - 1] = size; return string.Join(" ", t); }
+            return $"/Helv {size} Tf " + da;   // no Tf operator present; prepend a font selection
         }
 
         // ============================================================
@@ -4180,16 +5237,24 @@ namespace KillerPDF
 
             var stack = new StackPanel { Margin = new Thickness(4) };
 
-            // Title
-            stack.Children.Add(new TextBlock
+            // Title doubles as a drag handle so the user can move the popup anywhere inside the
+            // document area (position is remembered). Wrapped in a transparent Border so the whole
+            // title strip is grabbable, not just the text glyphs.
+            var sigHeader = new Border
             {
-                Text = "Signatures",
-                Foreground = (SolidColorBrush)FindResource("TextPrimary"),
-                FontFamily = new FontFamily("Segoe UI"),
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 13,
-                Margin = new Thickness(4, 2, 4, 6)
-            });
+                Background = Brushes.Transparent,
+                Margin     = new Thickness(0, 0, 0, 4),
+                Child = new TextBlock
+                {
+                    Text = "Signatures",
+                    Foreground = (SolidColorBrush)FindResource("TextPrimary"),
+                    FontFamily = new FontFamily("Segoe UI"),
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize = 13,
+                    Margin = new Thickness(4, 2, 4, 2)
+                }
+            };
+            stack.Children.Add(sigHeader);
 
             // Saved signatures
             if (_signatureStore.Signatures.Count > 0)
@@ -4321,11 +5386,11 @@ namespace KillerPDF
             {
                 Content = "Create Signature",
                 Style = (Style)FindResource("DarkButton"),
-                Background = (SolidColorBrush)FindResource("AccentDim"),
+                Background = (SolidColorBrush)FindResource("BgPanel"),
                 Foreground = (SolidColorBrush)FindResource("Accent"),
-                BorderBrush = (SolidColorBrush)FindResource("AccentDim"),
+                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
                 BorderThickness = new Thickness(1),
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
                 FontSize = 12,
                 Padding = new Thickness(12, 6, 12, 6),
                 Margin = new Thickness(4),
@@ -4336,6 +5401,8 @@ namespace KillerPDF
                 HideSignaturePopup();
                 OpenSignatureCreator();
             };
+            createBtn.MouseEnter += (s, e) => createBtn.Background = (SolidColorBrush)FindResource("BgHover");
+            createBtn.MouseLeave += (s, e) => createBtn.Background = (SolidColorBrush)FindResource("BgPanel");
             stack.Children.Add(createBtn);
 
             // Import image button
@@ -4343,11 +5410,11 @@ namespace KillerPDF
             {
                 Content = "Import Image",
                 Style = (Style)FindResource("DarkButton"),
-                Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x3a, 0x2e)),
-                Foreground = (SolidColorBrush)FindResource("Accent"),
-                BorderBrush = (SolidColorBrush)FindResource("AccentDim"),
+                Background = (SolidColorBrush)FindResource("BgPanel"),
+                Foreground = (SolidColorBrush)FindResource("TextPrimary"),
+                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
                 BorderThickness = new Thickness(1),
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
                 FontSize = 12,
                 Padding = new Thickness(12, 6, 12, 6),
                 Margin = new Thickness(4, 2, 4, 4),
@@ -4358,22 +5425,38 @@ namespace KillerPDF
                 HideSignaturePopup();
                 ImportImageSignature();
             };
+            importBtn.MouseEnter += (s, e) => importBtn.Background = (SolidColorBrush)FindResource("BgHover");
+            importBtn.MouseLeave += (s, e) => importBtn.Background = (SolidColorBrush)FindResource("BgPanel");
             stack.Children.Add(importBtn);
+
+            // Match the Settings/menu popups: themed modal surface + accent border + film grain.
+            var sigContent = new Grid();
+            sigContent.Children.Add(new Border
+            {
+                CornerRadius     = new CornerRadius(6),
+                IsHitTestVisible = false,
+                Opacity          = (double)FindResource("GrainOpacity"),
+                Background       = (System.Windows.Media.Brush)FindResource("GrainBrushShared")
+            });
+            sigContent.Children.Add(stack);
 
             _signaturePopup = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x1e)),
-                BorderBrush = (SolidColorBrush)FindResource("BorderDim"),
+                Background = (SolidColorBrush)FindResource("BgModal"),
+                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(4),
-                Child = stack,
-                HorizontalAlignment = HorizontalAlignment.Right,
+                Child = sigContent,
+                // Free-positioned (Left/Top) inside the document grid so it can be dragged; the
+                // exact spot is set after layout from the saved position (or a default top-right).
+                Width = 248,
+                HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 4, 80, 0),
+                Margin = new Thickness(0, 4, 0, 0),
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    Color = Colors.Black, BlurRadius = 12, Opacity = 0.5, ShadowDepth = 4
+                    Color = Colors.Black, BlurRadius = 16, Opacity = 0.55, ShadowDepth = 3
                 }
             };
 
@@ -4382,6 +5465,21 @@ namespace KillerPDF
             {
                 Panel.SetZIndex(_signaturePopup, 200);
                 previewGrid.Children.Add(_signaturePopup);
+                // Freshly-inserted element: defer the fade until it's laid out, otherwise the
+                // animation is missed (unlike the always-present Settings/About overlays).
+                _signaturePopup.Opacity = 0;
+                var popup = _signaturePopup;
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
+                {
+                    if (popup is null) return;
+                    // Place it (saved position, or default to the old top-right spot) and wire up
+                    // dragging now that ActualWidth/Height are known.
+                    ApplySavedPanelPosition(popup, previewGrid, "SigPopup", fallbackRightInset: 80, fallbackTop: 4);
+                    EnablePanelDrag(sigHeader, popup, previewGrid, "SigPopup");
+                    popup.BeginAnimation(UIElement.OpacityProperty,
+                        new DoubleAnimation(0, 1, new Duration(TimeSpan.FromMilliseconds(110)))
+                        { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+                }));
             }
         }
 
@@ -4393,6 +5491,88 @@ namespace KillerPDF
                 previewGrid?.Children.Remove(_signaturePopup);
                 _signaturePopup = null;
             }
+        }
+
+        // ---- Draggable floating panels (signature popup, settings panel) -------------------------
+
+        /// <summary>
+        /// Clamps a Left/Top so a panel stays fully inside its container's bounds.
+        /// </summary>
+        private static void ClampPanelToBounds(FrameworkElement panel, FrameworkElement bounds,
+                                               ref double left, ref double top)
+        {
+            double w = panel.ActualWidth  > 0 ? panel.ActualWidth  : panel.Width;
+            double h = panel.ActualHeight > 0 ? panel.ActualHeight : panel.Height;
+            if (double.IsNaN(w)) w = 0;
+            if (double.IsNaN(h)) h = 0;
+            double maxLeft = Math.Max(0, bounds.ActualWidth  - w);
+            double maxTop  = Math.Max(0, bounds.ActualHeight - h);
+            left = Math.Max(0, Math.Min(maxLeft, left));
+            top  = Math.Max(0, Math.Min(maxTop,  top));
+        }
+
+        /// <summary>
+        /// Positions a Left/Top-aligned floating panel from its saved position, falling back to a
+        /// top-right inset when nothing is stored. Always clamped inside <paramref name="bounds"/>.
+        /// Must run after layout so the panel's ActualWidth/Height are known.
+        /// </summary>
+        private void ApplySavedPanelPosition(FrameworkElement panel, FrameworkElement bounds, string keyPrefix,
+                                             double fallbackRightInset, double fallbackTop)
+        {
+            double w = panel.ActualWidth > 0 ? panel.ActualWidth : (double.IsNaN(panel.Width) ? 0 : panel.Width);
+            double left, top;
+            if (int.TryParse(App.GetSetting(keyPrefix + "Left"), out int sl) &&
+                int.TryParse(App.GetSetting(keyPrefix + "Top"),  out int st))
+            {
+                left = sl; top = st;
+            }
+            else
+            {
+                left = bounds.ActualWidth - w - fallbackRightInset;
+                top  = fallbackTop;
+            }
+            ClampPanelToBounds(panel, bounds, ref left, ref top);
+            panel.Margin = new Thickness(left, top, 0, 0);
+        }
+
+        /// <summary>
+        /// Makes <paramref name="handle"/> drag <paramref name="panel"/> within <paramref name="bounds"/>,
+        /// clamped to stay inside, and persists the resulting position under <paramref name="keyPrefix"/>.
+        /// </summary>
+        private void EnablePanelDrag(FrameworkElement handle, FrameworkElement panel, FrameworkElement bounds,
+                                     string keyPrefix)
+        {
+            handle.Cursor = Cursors.SizeAll;
+            Point start = default;
+            Thickness orig = default;
+            bool dragging = false;
+
+            handle.MouseLeftButtonDown += (s, e) =>
+            {
+                dragging = true;
+                start = e.GetPosition(bounds);
+                orig  = panel.Margin;
+                handle.CaptureMouse();
+                e.Handled = true;
+            };
+            handle.MouseMove += (s, e) =>
+            {
+                if (!dragging) return;
+                var p = e.GetPosition(bounds);
+                double nl = orig.Left + (p.X - start.X);
+                double nt = orig.Top  + (p.Y - start.Y);
+                ClampPanelToBounds(panel, bounds, ref nl, ref nt);
+                panel.Margin = new Thickness(nl, nt, 0, 0);
+            };
+            handle.MouseLeftButtonUp += (s, e) =>
+            {
+                if (!dragging) return;
+                dragging = false;
+                handle.ReleaseMouseCapture();
+                App.SetSetting(keyPrefix + "Left", ((int)panel.Margin.Left).ToString());
+                App.SetSetting(keyPrefix + "Top",  ((int)panel.Margin.Top).ToString());
+                e.Handled = true;
+            };
         }
 
         private void RenderSignaturePreview(Canvas canvas, SavedSignature sig, double targetW, double targetH)
@@ -4426,7 +5606,8 @@ namespace KillerPDF
             var win = new Window
             {
                 Title = "Create Signature",
-                Width = 460, Height = 300,
+                Width = 460,
+                SizeToContent = SizeToContent.Height,   // size to content so there's no empty padding below
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = this,
                 ResizeMode = ResizeMode.NoResize,
@@ -4434,52 +5615,65 @@ namespace KillerPDF
                 AllowsTransparency = true,
                 Background = System.Windows.Media.Brushes.Transparent
             };
+            TextOptions.SetTextFormattingMode(win, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(win, TextRenderingMode.Grayscale);
 
             // Outer chrome
             var outerChrome = new Border
             {
-                Background      = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
-                BorderBrush     = new SolidColorBrush(Color.FromRgb(0x22, 0x54, 0x3d)),
+                Background      = (SolidColorBrush)FindResource("BgModal"),
+                BorderBrush     = (SolidColorBrush)FindResource("PaneBorder"),   // 1px doc-pane frame
                 BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(6)
+                CornerRadius    = new CornerRadius(6),
+                Margin          = new Thickness(10),    // transparent halo so the drop shadow can render
+                Effect          = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = Colors.Black, BlurRadius = 18, ShadowDepth = 3, Direction = 270, Opacity = 0.6
+                }
             };
             var rootStack = new StackPanel();
 
-            // Title bar
+            // Title bar - transparent so the window-wide film grain shows through it too. No padding;
+            // the chrome close button sets the (slim) height and the title gets its own left inset.
             var titleBar = new Border
             {
-                Background   = new SolidColorBrush(Color.FromRgb(0x24, 0x24, 0x24)),
-                Padding      = new Thickness(14, 8, 8, 8),
+                Background   = Brushes.Transparent,
                 CornerRadius = new CornerRadius(5, 5, 0, 0)
             };
             titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
             var titleGrid = new Grid();
             titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var titleText = new TextBlock
+            // Wordmark + subtitle. A LAYERED shadow (a blurred dark copy behind a crisp copy) gives
+            // the text a soft shadow without an Effect rasterizing/blurring the visible text itself.
+            StackPanel BuildSigTitle(bool shadow)
             {
-                Text       = "Create Signature",
-                Foreground = new SolidColorBrush(Color.FromRgb(0x4a, 0xde, 0x80)),
-                FontWeight = FontWeights.SemiBold,
-                FontSize   = 13,
-                FontFamily = new FontFamily("Consolas"),
-                VerticalAlignment = VerticalAlignment.Center
-            };
+                var fam = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+                System.Windows.Media.Brush primary = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("TextPrimary");
+                System.Windows.Media.Brush logo    = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("AccentLogo");
+                System.Windows.Media.Brush sub      = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("TextSecondary");
+                var sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                sp.Children.Add(new TextBlock { Text = "Killer", FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 14, Foreground = primary, VerticalAlignment = VerticalAlignment.Center });
+                sp.Children.Add(new TextBlock { Text = "PDF",    FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 14, Foreground = logo, VerticalAlignment = VerticalAlignment.Center });
+                sp.Children.Add(new TextBlock { Text = " - Create Signature", FontFamily = fam, FontSize = 13, Foreground = sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
+                return sp;
+            }
+            var titleText = new Grid { Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var titleShadow = BuildSigTitle(true);
+            titleShadow.Opacity = 0.5;
+            titleShadow.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 2 };
+            titleShadow.RenderTransform = new TranslateTransform(0.7, 1.2);
+            titleText.Children.Add(titleShadow);
+            titleText.Children.Add(BuildSigTitle(false));
             Grid.SetColumn(titleText, 0);
             var closeWinBtn = new Button
             {
                 Content         = "",
-                FontFamily      = new FontFamily("Segoe MDL2 Assets"),
-                FontSize        = 10,
-                Width           = 28, Height = 28,
-                Background      = System.Windows.Media.Brushes.Transparent,
-                Foreground      = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
-                BorderThickness = new Thickness(0),
-                Cursor          = Cursors.Hand,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Top,
+                // Same chrome close button as the print dialog / main window: red fill on hover
+                // that follows the window's rounded top-right corner.
+                Style = (Style)FindResource("ChromeCloseButton")
             };
-            closeWinBtn.MouseEnter += (_, _2) => closeWinBtn.Foreground = new SolidColorBrush(Color.FromRgb(0xef, 0x44, 0x44));
-            closeWinBtn.MouseLeave += (_, _2) => closeWinBtn.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88));
             closeWinBtn.Click += (_, _2) => win.Close();
             Grid.SetColumn(closeWinBtn, 1);
             titleGrid.Children.Add(titleText);
@@ -4506,16 +5700,18 @@ namespace KillerPDF
             canvasBorder.Child = drawCanvas;
 
             // Placeholder text
+            // In a Canvas, alignment is ignored, so position the hint with a little padding rather
+            // than leaving it jammed in the top-left corner. A script face suits a signature prompt.
             var placeholder = new TextBlock
             {
                 Text = "Draw your signature here",
-                Foreground = new SolidColorBrush(Color.FromRgb(0xbb, 0xbb, 0xbb)),
-                FontFamily = new FontFamily("Segoe UI"),
-                FontSize = 14, FontStyle = FontStyles.Italic,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xb0, 0xb0, 0xb0)),
+                FontFamily = new FontFamily("Segoe Script, Segoe UI"),
+                FontSize = 18,
                 IsHitTestVisible = false
             };
+            Canvas.SetLeft(placeholder, 18);
+            Canvas.SetTop(placeholder, 14);
             drawCanvas.Children.Add(placeholder);
 
             // Drawing state
@@ -4580,11 +5776,11 @@ namespace KillerPDF
                 Style = (Style)FindResource("DarkButton"),
                 Padding = new Thickness(16, 6, 16, 6),
                 Margin = new Thickness(0, 0, 8, 0),
-                Background = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)),
+                Background = (SolidColorBrush)FindResource("BgPanel"),
+                Foreground = (SolidColorBrush)FindResource("TextPrimary"),
+                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
                 BorderThickness = new Thickness(1),
-                FontFamily = new FontFamily("Consolas")
+                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI")
             };
             clearBtn.Click += (s, e) =>
             {
@@ -4593,18 +5789,34 @@ namespace KillerPDF
                 placeholder.Visibility = Visibility.Visible;
                 drawCanvas.Children.Add(placeholder);
             };
+            clearBtn.MouseEnter += (s, e) => clearBtn.Background = (SolidColorBrush)FindResource("BgHover");
+            clearBtn.MouseLeave += (s, e) => clearBtn.Background = (SolidColorBrush)FindResource("BgPanel");
 
+            // Primary button, but subtle at rest (accent text/border on the panel colour) so it
+            // doesn't read as a solid white block in the white-accent themes; it fills on hover.
             var saveBtn = new Button
             {
                 Content = "Save Signature",
                 Style = (Style)FindResource("DarkButton"),
                 Padding = new Thickness(16, 6, 16, 6),
-                Background = new SolidColorBrush(Color.FromRgb(0x22, 0x54, 0x3d)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0x4a, 0xde, 0x80)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x4a, 0xde, 0x80)),
+                Background = (SolidColorBrush)FindResource("BgPanel"),
+                // Use the scrollbar's softer accent (peach in the RGB themes, green in Dark) rather
+                // than the stark white Accent so the primary button doesn't glare.
+                Foreground = (SolidColorBrush)FindResource("ScrollThumbHover"),
+                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
                 BorderThickness = new Thickness(1),
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
                 FontWeight = FontWeights.SemiBold
+            };
+            saveBtn.MouseEnter += (s, e) =>
+            {
+                saveBtn.Background = (SolidColorBrush)FindResource("ScrollThumbHover");
+                saveBtn.Foreground = (SolidColorBrush)FindResource("BgModal");
+            };
+            saveBtn.MouseLeave += (s, e) =>
+            {
+                saveBtn.Background = (SolidColorBrush)FindResource("BgPanel");
+                saveBtn.Foreground = (SolidColorBrush)FindResource("ScrollThumbHover");
             };
             saveBtn.Click += (s, e) =>
             {
@@ -4644,7 +5856,19 @@ namespace KillerPDF
             contentArea.Children.Add(btnPanel);
 
             rootStack.Children.Add(contentArea);
-            outerChrome.Child = rootStack;
+
+            // Film grain behind everything (incl. the transparent title bar) so this window carries
+            // the same texture as the rest of the app.
+            var creatorGrid = new Grid();
+            creatorGrid.Children.Add(new Border
+            {
+                CornerRadius     = new CornerRadius(6),
+                IsHitTestVisible = false,
+                Opacity          = (double)FindResource("GrainOpacity"),
+                Background       = (System.Windows.Media.Brush)FindResource("GrainBrushShared")
+            });
+            creatorGrid.Children.Add(rootStack);
+            outerChrome.Child = creatorGrid;
             win.Content = outerChrome;
             win.ShowDialog();
         }
@@ -4783,6 +6007,87 @@ namespace KillerPDF
             }
         }
 
+        // Ctrl+V: drop a clipboard image (as an image annotation) or clipboard text (as a text
+        // annotation) onto the current page, centered, then select it. Coordinates are in the page's
+        // render-dim space (== _renderDims[page]), matching how clicks place annotations.
+        private void PasteFromClipboard()
+        {
+            if (_doc is null) return;
+            int pageIdx = PageList.SelectedIndex;
+            if (pageIdx < 0) pageIdx = 0;
+            if (pageIdx >= _doc.PageCount) return;
+
+            double pw = _renderDims.TryGetValue(pageIdx, out var rd) ? rd.w : 2048.0;
+            double ph = _renderDims.TryGetValue(pageIdx, out var rd2) ? rd2.h : 2048.0;
+
+            try
+            {
+                if (Clipboard.ContainsImage())
+                {
+                    var src = Clipboard.GetImage();
+                    if (src is null) { SetStatus("Clipboard image could not be read"); return; }
+
+                    // Encode to PNG so ImageAnnotation stores standard bytes (same as file import).
+                    byte[] imgBytes;
+                    var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                    encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(src));
+                    using (var ms = new MemoryStream()) { encoder.Save(ms); imgBytes = ms.ToArray(); }
+
+                    double srcW = src.PixelWidth  > 0 ? src.PixelWidth  : 400;
+                    double srcH = src.PixelHeight > 0 ? src.PixelHeight : 300;
+                    double pageMax = Math.Max(pw, ph);
+                    double maxCanvasDim = pageMax * 0.5;
+                    double scale = Math.Min(1.0, Math.Min(maxCanvasDim / srcW, maxCanvasDim / srcH));
+                    double w = srcW * scale, h = srcH * scale;
+                    var pos = new Point((pw - w) / 2, (ph - h) / 2);
+
+                    var imgAnnot = new ImageAnnotation
+                    {
+                        PageIndex = pageIdx, Position = pos, Scale = scale,
+                        SourceWidth = srcW, SourceHeight = srcH,
+                        ImageData = Convert.ToBase64String(imgBytes)
+                    };
+                    SetTool(EditTool.Select);
+                    AddAnnotation(imgAnnot);
+                    RenderAllAnnotations(pageIdx);
+                    SelectAnnotation(imgAnnot, new Rect(pos.X, pos.Y, w, h));
+                    SetStatus("Pasted image - drag to reposition, use the corner handle to resize");
+                }
+                else if (Clipboard.ContainsText())
+                {
+                    string content = Clipboard.GetText().Trim();
+                    if (string.IsNullOrEmpty(content)) { SetStatus("Clipboard has no text to paste"); return; }
+
+                    // Convert the point size to the page's canvas units (see PlaceTextBox).
+                    double fontCanvas = _textFontSize;
+                    double sy = _doc.Pages[pageIdx].Height.Point / Math.Max(1.0, ph);
+                    if (sy > 0) fontCanvas = _textFontSize / sy;
+
+                    var ta = new TextAnnotation
+                    {
+                        PageIndex = pageIdx,
+                        Position  = new Point(pw * 0.25, ph * 0.45),
+                        Content   = content,
+                        FontSize  = fontCanvas
+                    };
+                    ta.SetColor(_textColor);
+                    SetTool(EditTool.Select);
+                    AddAnnotation(ta);
+                    RenderAllAnnotations(pageIdx);
+                    SelectAnnotation(ta, AnnotBounds(ta));
+                    SetStatus("Pasted text - drag to reposition, Delete to remove");
+                }
+                else
+                {
+                    SetStatus("Clipboard has nothing to paste");
+                }
+            }
+            catch (Exception ex)
+            {
+                KillerDialog.Show(this, $"Could not paste:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         // ============================================================
         // Canvas interaction
         // ============================================================
@@ -4830,6 +6135,10 @@ namespace KillerPDF
             var pos = e.GetPosition(_activeCanvas);
             int pageIdx = _activeCanvas.Tag is int tagPage ? tagPage : PageList.SelectedIndex;
             if (pageIdx < 0) return;
+            // Pin the surface/page this gesture started on so async re-renders (grid tile streaming)
+            // can't redirect the in-progress draw/select to another page. See _gestureCanvas.
+            _gestureCanvas = _activeCanvas;
+            _gesturePage   = pageIdx;
 
             // Crop corner handles live in the outer panel and have direct MouseLeftButtonDown
             // handlers attached in AddCropHandles() — no detection needed here.
@@ -4877,6 +6186,8 @@ namespace KillerPDF
                     }
                     else
                     {
+                        // Shift+click builds a multi-selection instead of replacing it.
+                        bool shiftSel = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
                         // Single click: check if hitting a PlacedAnnotation first — select and drag
                         bool hitPlaced = false;
                         if (_annotations.TryGetValue(pageIdx, out var pageAnnotsList))
@@ -4887,6 +6198,14 @@ namespace KillerPDF
                                     HitTestAnnotation(pageAnnotsList[i], pos, out Rect paBounds))
                                 {
                                     var pa = pageAnnotsList[i];
+                                    if (shiftSel)
+                                    {
+                                        // Toggle in/out of the multi-selection; no drag while shifting.
+                                        ToggleMultiSelect(pa, paBounds, _gestureCanvas ?? _activeCanvas);
+                                        e.Handled = true;
+                                        hitPlaced = true;
+                                        break;
+                                    }
                                     ClearSelection();
                                     RenderAllAnnotations(pageIdx);
                                     SelectAnnotation(pa, paBounds);
@@ -4903,7 +6222,9 @@ namespace KillerPDF
                         }
                         if (!hitPlaced)
                         {
-                            ClearSelection();
+                            // Keep the existing multi-selection when shift is held (a click on a
+                            // non-draggable annotation is added on mouse-up); only a plain click clears.
+                            if (!shiftSel) ClearSelection();
                             ClearTextSelection();
                             _isSelecting = true;
                             _selectStart = pos;
@@ -4931,12 +6252,17 @@ namespace KillerPDF
                     break;
 
                 case EditTool.Highlight:
+                case EditTool.Strikethrough:
+                case EditTool.Underline:
                     ClearSelection();
                     _isDrawing = true;
                     _drawStart = pos;
+                    var previewFill = _currentTool == EditTool.Highlight
+                        ? _highlightColor
+                        : Color.FromArgb(70, _lineAnnotColor.R, _lineAnnotColor.G, _lineAnnotColor.B);
                     var rect = new Rectangle
                     {
-                        Fill = new SolidColorBrush(_highlightColor),
+                        Fill = new SolidColorBrush(previewFill),
                         Width = 0, Height = 0
                     };
                     Canvas.SetLeft(rect, pos.X);
@@ -5016,9 +6342,12 @@ namespace KillerPDF
             if (e.OriginalSource is DependencyObject moveSrc && IsFormFieldElement(moveSrc))
                 return;
 
-            var pos = e.GetPosition(_activeCanvas);
-            pos.X = Math.Max(0, Math.Min(_activeCanvas.ActualWidth, pos.X));
-            pos.Y = Math.Max(0, Math.Min(_activeCanvas.ActualHeight, pos.Y));
+            // Resolve the pointer against the surface the gesture started on, not _activeCanvas,
+            // which RenderAllAnnotations (and async grid tile streaming) can re-point mid-gesture.
+            var gc = _gestureCanvas ?? _activeCanvas;
+            var pos = e.GetPosition(gc);
+            pos.X = Math.Max(0, Math.Min(gc.ActualWidth, pos.X));
+            pos.Y = Math.Max(0, Math.Min(gc.ActualHeight, pos.Y));
 
             // Signature resize drag
             if (_isResizingSig && _resizeSigAnnot is not null)
@@ -5126,7 +6455,10 @@ namespace KillerPDF
 
             switch (_currentTool)
             {
-                case EditTool.Highlight when _activePreview is Rectangle rect:
+                case EditTool.Highlight when _activePreview is Rectangle:
+                case EditTool.Strikethrough when _activePreview is Rectangle:
+                case EditTool.Underline when _activePreview is Rectangle:
+                    var rect = (Rectangle)_activePreview;
                     Canvas.SetLeft(rect, Math.Min(pos.X, _drawStart.X));
                     Canvas.SetTop(rect, Math.Min(pos.Y, _drawStart.Y));
                     rect.Width = Math.Abs(pos.X - _drawStart.X);
@@ -5200,13 +6532,25 @@ namespace KillerPDF
                 IsDescendantOf(cropSrc, _cropConfirmBar))
                 return;
 
-            int pageIdx = PageList.SelectedIndex;
+            // The gesture may have re-pointed _activeCanvas via RenderAllAnnotations since mouse-down
+            // (in Grid view, async tile streaming does this), so restore it to the surface the
+            // gesture started on. This makes page resolution, capture release, and preview cleanup
+            // below all act on the correct page - the root cause of highlights landing on the wrong
+            // page and select/delete failing in Grid view.
+            if (_gestureCanvas is not null) _activeCanvas = _gestureCanvas;
+
+            // Use the page the gesture started on (continuous/grid have per-page canvases tagged
+            // with their index), matching the mouse-down handler. Falls back to the selected page
+            // for the single-page canvas. Prevents committing an annotation to the wrong page.
+            int pageIdx = _gesturePage >= 0
+                ? _gesturePage
+                : (_activeCanvas?.Tag is int tagPage ? tagPage : PageList.SelectedIndex);
 
             // Finish crop handle drag
             if (_activeCropHandleTag is not null)
             {
                 _activeCropHandleTag = null;
-                _activeCanvas.ReleaseMouseCapture();
+                _activeCanvas?.ReleaseMouseCapture();
                 return;
             }
 
@@ -5214,7 +6558,7 @@ namespace KillerPDF
             if (_isDraggingAnnot)
             {
                 _isDraggingAnnot = false;
-                _activeCanvas.ReleaseMouseCapture();
+                _activeCanvas?.ReleaseMouseCapture();
                 if (_dragAnnot is not null)
                 {
                     var da = _dragAnnot;
@@ -5250,7 +6594,7 @@ namespace KillerPDF
             if (_isResizingSig)
             {
                 _isResizingSig = false;
-                _activeCanvas.ReleaseMouseCapture();
+                _activeCanvas?.ReleaseMouseCapture();
                 if (_resizeSigAnnot is not null)
                 {
                     // Final re-render and re-select to reposition handle cleanly
@@ -5269,7 +6613,7 @@ namespace KillerPDF
             if (_isSelecting)
             {
                 _isSelecting = false;
-                _activeCanvas.ReleaseMouseCapture();
+                _activeCanvas?.ReleaseMouseCapture();
                 var pos = e.GetPosition(_activeCanvas);
                 double dragW = Math.Abs(pos.X - _selectStart.X);
                 double dragH = Math.Abs(pos.Y - _selectStart.Y);
@@ -5278,13 +6622,19 @@ namespace KillerPDF
                 {
                     // Tiny drag = single click -> try annotation selection
                     ClearTextSelection();
+                    bool shiftSel = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
                     if (pageIdx >= 0 && _annotations.ContainsKey(pageIdx))
                     {
                         for (int i = _annotations[pageIdx].Count - 1; i >= 0; i--)
                         {
                             if (HitTestAnnotation(_annotations[pageIdx][i], _selectStart, out Rect bounds))
                             {
-                                SelectAnnotation(_annotations[pageIdx][i], bounds);
+                                if (shiftSel)
+                                    // Add/remove this annotation from the multi-selection.
+                                    ToggleMultiSelect(_annotations[pageIdx][i], bounds,
+                                                      _gestureCanvas ?? CanvasForPage(pageIdx));
+                                else
+                                    SelectAnnotation(_annotations[pageIdx][i], bounds);
                                 break;
                             }
                         }
@@ -5303,24 +6653,34 @@ namespace KillerPDF
 
             if (!_isDrawing) return;
             _isDrawing = false;
-            _activeCanvas.ReleaseMouseCapture();
+            _activeCanvas?.ReleaseMouseCapture();
 
             switch (_currentTool)
             {
-                case EditTool.Highlight when _activePreview is Rectangle rect:
-                    if (rect.Width > 3 && rect.Height > 3)
+                case EditTool.Highlight when _activePreview is Rectangle:
+                case EditTool.Strikethrough when _activePreview is Rectangle:
+                case EditTool.Underline when _activePreview is Rectangle:
                     {
-                        var ha = new HighlightAnnotation
+                        var rect = (Rectangle)_activePreview;
+                        if (rect.Width > 3 && rect.Height > 3)
                         {
-                            PageIndex = pageIdx,
-                            Bounds = new Rect(Canvas.GetLeft(rect), Canvas.GetTop(rect), rect.Width, rect.Height)
-                        };
-                        ha.SetColor(_highlightColor);
-                        AddAnnotation(ha);
-                    }
-                    else
-                    {
-                        _activeCanvas.Children.Remove(rect);
+                            var ha = new HighlightAnnotation
+                            {
+                                PageIndex = pageIdx,
+                                Bounds = new Rect(Canvas.GetLeft(rect), Canvas.GetTop(rect), rect.Width, rect.Height),
+                                Style = _currentTool == EditTool.Strikethrough ? HighlightStyle.Strikethrough
+                                      : _currentTool == EditTool.Underline   ? HighlightStyle.Underline
+                                      : HighlightStyle.Fill
+                            };
+                            ha.SetColor(_currentTool == EditTool.Highlight ? _highlightColor : _lineAnnotColor);
+                            AddAnnotation(ha);
+                            _activeCanvas?.Children.Remove(rect);
+                            RenderAllAnnotations(pageIdx);
+                        }
+                        else
+                        {
+                            _activeCanvas?.Children.Remove(rect);
+                        }
                     }
                     break;
 
@@ -5331,13 +6691,13 @@ namespace KillerPDF
                     }
                     else
                     {
-                        _activeCanvas.Children.Remove(_activePreview);
+                        _activeCanvas?.Children.Remove(_activePreview);
                     }
                     _activeInk = null;
                     break;
 
                 case EditTool.Crop when _activePreview is Rectangle cr:
-                    _activeCanvas.ReleaseMouseCapture(); // MUST release before showing handles
+                    _activeCanvas?.ReleaseMouseCapture(); // MUST release before showing handles
                     if (cr.Width > 10 && cr.Height > 10)
                     {
                         _cropCanvasRect = new Rect(Canvas.GetLeft(cr), Canvas.GetTop(cr), cr.Width, cr.Height);
@@ -5349,7 +6709,7 @@ namespace KillerPDF
                     }
                     else
                     {
-                        _activeCanvas.Children.Remove(cr);
+                        _activeCanvas?.Children.Remove(cr);
                         _cropPreviewRect = null;
                     }
                     break;
@@ -5543,12 +6903,13 @@ namespace KillerPDF
         {
             if (_selectionBorder is not null)
             {
-                _activeCanvas.Children.Remove(_selectionBorder);
+                (_selectionBorder.Parent as Canvas)?.Children.Remove(_selectionBorder);
                 _selectionBorder = null;
             }
             foreach (var hd in _resizeHandles)
-                _activeCanvas.Children.Remove(hd);
+                (hd.Parent as Canvas)?.Children.Remove(hd);
             _resizeHandles.Clear();
+            ClearMultiSelection();
             _isResizingSig = false;
             _resizeSigAnnot = null;
             _isDraggingAnnot = false;
@@ -5556,15 +6917,112 @@ namespace KillerPDF
             _selectedAnnotation = null;
         }
 
+        // ---- Shift+click multi-selection (Select tool) -------------------------------------------
+
+        /// <summary>Removes every shift-selection outline and empties the multi-selection set.</summary>
+        private void ClearMultiSelection()
+        {
+            foreach (var o in _selectionOutlines)
+                (o.Parent as Canvas)?.Children.Remove(o);
+            _selectionOutlines.Clear();
+            _selectedSet.Clear();
+        }
+
+        /// <summary>The overlay canvas that hosts a given page's annotations.</summary>
+        private Canvas CanvasForPage(int pageIndex)
+            => _continuousCanvases.TryGetValue(pageIndex, out var c) ? c : _annotationCanvas;
+
+        /// <summary>Total annotations currently selected (primary + shift-selected set).</summary>
+        private int SelectionCount()
+            => _selectedSet.Count
+             + (_selectedAnnotation is not null && !_selectedSet.Contains(_selectedAnnotation) ? 1 : 0);
+
+        /// <summary>Draws a selection outline for a shift-selected annotation on its page canvas.</summary>
+        private void AddSelectionOutline(Rect bounds, Canvas canvas)
+        {
+            // Match SelectAnnotation: counter a continuous/grid overlay's LayoutTransform so the
+            // outline keeps a constant on-screen thickness regardless of the tile scale.
+            double inv = 1.0;
+            if (canvas.LayoutTransform is ScaleTransform st && st.ScaleX > 0.0001)
+                inv = 1.0 / st.ScaleX;
+            var outline = new Border
+            {
+                BorderBrush     = AccentBrush(),
+                BorderThickness = new Thickness(2 * inv),
+                Background      = AccentBrush(40),
+                Width           = bounds.Width + 8,
+                Height          = bounds.Height + 8,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(outline, bounds.X - 4);
+            Canvas.SetTop(outline, bounds.Y - 4);
+            canvas.Children.Add(outline);
+            _selectionOutlines.Add(outline);
+        }
+
+        /// <summary>
+        /// Shift+click handler: toggle an annotation in or out of the multi-selection. The first
+        /// shift+click folds any existing single selection into the set so nothing is lost.
+        /// </summary>
+        private void ToggleMultiSelect(PageAnnotation annot, Rect bounds, Canvas canvas)
+        {
+            // Fold an existing single (primary) selection into the set so it stays selected.
+            if (_selectedAnnotation is not null && !_selectedSet.Contains(_selectedAnnotation))
+            {
+                var prim = _selectedAnnotation;
+                // Drop the single-selection chrome (border + resize handles) but keep the annotation.
+                if (_selectionBorder is not null)
+                {
+                    (_selectionBorder.Parent as Canvas)?.Children.Remove(_selectionBorder);
+                    _selectionBorder = null;
+                }
+                foreach (var hd in _resizeHandles)
+                    (hd.Parent as Canvas)?.Children.Remove(hd);
+                _resizeHandles.Clear();
+                _selectedAnnotation = null;
+                _selectedSet.Add(prim);
+                AddSelectionOutline(AnnotBounds(prim), CanvasForPage(prim.PageIndex));
+            }
+
+            if (_selectedSet.Remove(annot))
+            {
+                // Was selected -> rebuild the outlines without it.
+                foreach (var o in _selectionOutlines)
+                    (o.Parent as Canvas)?.Children.Remove(o);
+                _selectionOutlines.Clear();
+                foreach (var a in _selectedSet)
+                    AddSelectionOutline(AnnotBounds(a), CanvasForPage(a.PageIndex));
+            }
+            else
+            {
+                _selectedSet.Add(annot);
+                AddSelectionOutline(bounds, canvas);
+            }
+
+            int n = SelectionCount();
+            SetStatus(n == 0 ? "Selection cleared"
+                             : $"{n} annotations selected - press Delete to remove");
+        }
+
         private void DeleteSelected()
         {
-            if (_selectedAnnotation is null) return;
-            int pageIdx = _selectedAnnotation.PageIndex;
-            if (_annotations.ContainsKey(pageIdx))
-                _annotations[pageIdx].Remove(_selectedAnnotation);
+            // Gather the primary selection plus any shift-selected annotations, de-duplicated.
+            var toDelete = new List<PageAnnotation>();
+            if (_selectedAnnotation is not null) toDelete.Add(_selectedAnnotation);
+            foreach (var a in _selectedSet)
+                if (!toDelete.Contains(a)) toDelete.Add(a);
+            if (toDelete.Count == 0) return;
+
+            var pages = new HashSet<int>();
+            foreach (var a in toDelete)
+                if (_annotations.TryGetValue(a.PageIndex, out var list) && list.Remove(a))
+                    pages.Add(a.PageIndex);
+
             ClearSelection();
-            RenderAllAnnotations(pageIdx);
-            SetStatus("Deleted selected annotation");
+            foreach (var p in pages) RenderAllAnnotations(p);
+            SetStatus(toDelete.Count == 1
+                ? "Deleted selected annotation"
+                : $"Deleted {toDelete.Count} annotations");
         }
 
         private void SelectAllText()
@@ -5744,13 +7202,14 @@ namespace KillerPDF
                 // Build search bar programmatically and inject into the preview area grid
                 _searchBox = new TextBox
                 {
-                    Width = 260,
-                    Height = 28,
-                    FontFamily = new FontFamily("Segoe UI"),
+                    Width = 200,
+                    Height = 26,
+                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
                     FontSize = 13,
-                    Background = new SolidColorBrush(Color.FromRgb(0x2a, 0x2a, 0x2a)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(0xe0, 0xe0, 0xe0)),
-                    BorderBrush = (SolidColorBrush)FindResource("Accent"), SelectionBrush = AccentBrush(),
+                    Background = (SolidColorBrush)FindResource("BgCanvas"),
+                    Foreground = (SolidColorBrush)FindResource("TextPrimary"),
+                    CaretBrush = (SolidColorBrush)FindResource("TextPrimary"),
+                    BorderBrush = (SolidColorBrush)FindResource("AccentBorder"), SelectionBrush = AccentBrush(),
                     BorderThickness = new Thickness(1),
                     Padding = new Thickness(6, 2, 6, 2),
                     VerticalContentAlignment = VerticalAlignment.Center
@@ -5758,23 +7217,54 @@ namespace KillerPDF
                 _searchBox.KeyDown += SearchBox_KeyDown;
                 _searchBox.TextChanged += SearchBox_TextChanged;
 
+                // Custom template so the default WPF blue focus/hover border never shows; keep our themed border.
+                var tbTemplate = new ControlTemplate(typeof(TextBox));
+                var tbBorder = new FrameworkElementFactory(typeof(Border));
+                tbBorder.SetValue(Border.BackgroundProperty, new System.Windows.TemplateBindingExtension(Control.BackgroundProperty));
+                tbBorder.SetValue(Border.BorderBrushProperty, new System.Windows.TemplateBindingExtension(Control.BorderBrushProperty));
+                tbBorder.SetValue(Border.BorderThicknessProperty, new System.Windows.TemplateBindingExtension(Control.BorderThicknessProperty));
+                tbBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+                var tbHost = new FrameworkElementFactory(typeof(ScrollViewer));
+                tbHost.Name = "PART_ContentHost";
+                tbHost.SetValue(ScrollViewer.PaddingProperty, new System.Windows.TemplateBindingExtension(Control.PaddingProperty));
+                tbHost.SetValue(ScrollViewer.VerticalAlignmentProperty, VerticalAlignment.Center);
+                tbBorder.AppendChild(tbHost);
+                tbTemplate.VisualTree = tbBorder;
+                _searchBox.Template = tbTemplate;
+                _searchBox.FocusVisualStyle = null;
+
+                // Fixed width + centered so the result count never resizes the bar.
                 _searchStatus = new TextBlock
                 {
                     Foreground = (SolidColorBrush)FindResource("TextSecondary"),
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
                     FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(8, 0, 0, 0)
+                    TextAlignment = TextAlignment.Center,
+                    Width = 84,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(6, 0, 4, 0)
                 };
 
-                var closeBtn = new Button
+                // Small VSCode-style prev / next / close buttons. Hover tooltips carry the shortcuts.
+                Button SearchNavBtn(string glyph, string tip, Action onClick)
                 {
-                    Content = "\ue711",  // MDL2 Cancel glyph \u2014 matches ToolbarButton font
-                    Margin = new Thickness(4, 0, 0, 0),
-                    Style = (Style)FindResource("ToolbarButton"),
-                    ToolTip = "Close search (Esc)"
-                };
-                closeBtn.Click += (s, e) => CloseSearchBar();
+                    var b = new Button
+                    {
+                        Content    = glyph,
+                        FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                        FontSize   = 12,
+                        Width = 26, Height = 24,
+                        Padding    = new Thickness(0),   // ToolbarButton's 10,6 padding clips the glyph in a 26px button
+                        Style      = (Style)FindResource("ToolbarButton"),
+                        ToolTip    = tip
+                    };
+                    b.Click += (_, _) => onClick();
+                    return b;
+                }
+                var prevBtn  = SearchNavBtn("\ue70e", "Previous Match (Shift+Enter)", SearchPrevResult); // ChevronUp
+                var nextBtn  = SearchNavBtn("\ue70d", "Next Match (Enter)", SearchNextResult);            // ChevronDown
+                var closeBtn = SearchNavBtn("\ue711", "Close (Esc)", CloseSearchBar);                     // Cancel
 
                 var searchIcon = new TextBlock
                 {
@@ -5790,24 +7280,28 @@ namespace KillerPDF
                 var panel = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Margin = new Thickness(8)
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(8, 6, 8, 6)
                 };
                 panel.Children.Add(searchIcon);
                 panel.Children.Add(_searchBox);
                 panel.Children.Add(_searchStatus);
+                panel.Children.Add(prevBtn);
+                panel.Children.Add(nextBtn);
                 panel.Children.Add(closeBtn);
 
                 _searchBar = new Border
                 {
-                    Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x1a, 0x1a)),
-                    BorderBrush = (SolidColorBrush)FindResource("BorderDim"),
-                    BorderThickness = new Thickness(0, 0, 0, 1),
+                    Background = (SolidColorBrush)FindResource("BgPanel"),
+                    BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
+                    BorderThickness = new Thickness(1),
                     HorizontalAlignment = HorizontalAlignment.Right,
                     VerticalAlignment = VerticalAlignment.Top,
                     CornerRadius = new CornerRadius(0, 0, 4, 4),
                     Padding = new Thickness(4),
-                    Child = panel,
-                    Margin = new Thickness(0, 0, 16, 0)
+                    Child = GrainWrap(panel),
+                    Margin = new Thickness(0, 0, 16, 0),
+                    Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 16, ShadowDepth = 3, Direction = 270, Opacity = 0.55 }
                 };
 
                 // Add to the preview area grid (parent of ScrollViewer)
@@ -5821,7 +7315,7 @@ namespace KillerPDF
 
             _searchBar.Visibility = Visibility.Visible;
             _searchBox!.Text = "";
-            if (_searchStatus != null) _searchStatus.Text = "Enter = next  Shift+Enter = prev";
+            if (_searchStatus != null) _searchStatus.Text = "";
             _searchBox.Focus();
             Keyboard.Focus(_searchBox);
         }
@@ -5850,18 +7344,35 @@ namespace KillerPDF
             }
         }
 
+        private System.Windows.Threading.DispatcherTimer? _searchDebounce;
+
         private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             var text = _searchBox?.Text ?? "";
-            if (text.Length >= 2)
-                RunSearch(text);
-            else
+            if (text.Length < 2)
             {
+                _searchDebounce?.Stop();
                 ClearSearchHighlights();
                 _allSearchRects.Clear();
                 _searchResultPages.Clear();
                 _searchPageCursor = -1;
+                return;
             }
+            // Debounce: wait for a brief pause in typing before searching, so the first keystrokes
+            // on a large document don't lock the UI while it searches partial queries.
+            if (_searchDebounce is null)
+            {
+                _searchDebounce = new System.Windows.Threading.DispatcherTimer
+                    { Interval = TimeSpan.FromMilliseconds(250) };
+                _searchDebounce.Tick += (_, _) =>
+                {
+                    _searchDebounce!.Stop();
+                    var q = _searchBox?.Text ?? "";
+                    if (q.Length >= 2) RunSearch(q);
+                };
+            }
+            _searchDebounce.Stop();
+            _searchDebounce.Start();
         }
 
         private readonly SearchService _searchService = new();
@@ -5897,10 +7408,8 @@ namespace KillerPDF
                 _searchPageCursor = _searchResultPages.FindIndex(p => p >= startPage);
                 if (_searchPageCursor < 0) _searchPageCursor = 0;
 
-                if (_searchStatus != null)
-                    _searchStatus.Text = sr.TotalHits == 1
-                        ? $"1 match ({_searchResultPages.Count} page)"
-                        : $"{sr.TotalHits} matches ({_searchResultPages.Count} page{(_searchResultPages.Count != 1 ? "s" : "")})";
+                _searchTotalHits = sr.TotalHits;
+                UpdateSearchStatus();
 
                 int targetPage = _searchResultPages[_searchPageCursor];
                 if (PageList.SelectedIndex != targetPage)
@@ -5938,10 +7447,27 @@ namespace KillerPDF
             catch { }
         }
 
+        private int _searchTotalHits;
+
+        // Compact VSCode-style count ("2 / 5"); full detail lives in the tooltip.
+        private void UpdateSearchStatus()
+        {
+            if (_searchStatus is null) return;
+            if (_searchResultPages.Count == 0)
+            {
+                _searchStatus.Text = "No matches";
+                _searchStatus.ToolTip = null;
+                return;
+            }
+            _searchStatus.Text = $"{_searchPageCursor + 1} / {_searchResultPages.Count}";
+            _searchStatus.ToolTip = $"{_searchTotalHits} match{(_searchTotalHits != 1 ? "es" : "")} on {_searchResultPages.Count} page{(_searchResultPages.Count != 1 ? "s" : "")}";
+        }
+
         private void SearchNextResult()
         {
             if (_searchResultPages.Count == 0) return;
             _searchPageCursor = (_searchPageCursor + 1) % _searchResultPages.Count;
+            UpdateSearchStatus();
             int targetPage = _searchResultPages[_searchPageCursor];
             if (PageList.SelectedIndex != targetPage)
                 PageList.SelectedIndex = targetPage;
@@ -5953,6 +7479,7 @@ namespace KillerPDF
         {
             if (_searchResultPages.Count == 0) return;
             _searchPageCursor = (_searchPageCursor - 1 + _searchResultPages.Count) % _searchResultPages.Count;
+            UpdateSearchStatus();
             int targetPage = _searchResultPages[_searchPageCursor];
             if (PageList.SelectedIndex != targetPage)
                 PageList.SelectedIndex = targetPage;
@@ -6074,6 +7601,7 @@ namespace KillerPDF
                 {
                     var pcol = placed.GetColor();
                     _textColor = pcol;
+                    _textOpacity = pcol.A;   // keep the opacity slider in sync with the edited text
                     double syp = 1.0;
                     if (_doc is not null && _renderDims.TryGetValue(pageIdx, out var prd) && prd.h > 0)
                         syp = _doc.Pages[pageIdx].Height.Point / prd.h;
@@ -6467,7 +7995,11 @@ namespace KillerPDF
             double x = Canvas.GetLeft(tb);
             double y = Canvas.GetTop(tb);
 
-            _activeCanvas.Children.Remove(tb);
+            // Resolve the canvas of the text box's OWN page. _activeCanvas may have moved to a
+            // different page when the user clicked away to commit (continuous/grid mode), which
+            // would otherwise render the text on the wrong page and leave undo unable to clear it.
+            var pageCanvas = _continuousCanvases.TryGetValue(pageIdx, out var pc) ? pc : _annotationCanvas;
+            pageCanvas.Children.Remove(tb);
 
             if (!string.IsNullOrEmpty(content))
             {
@@ -6480,7 +8012,7 @@ namespace KillerPDF
                 };
                 ta.SetColor(tb.Foreground is SolidColorBrush scb ? scb.Color : Colors.Black);
                 AddAnnotation(ta);
-                RenderTextAnnotation(ta);
+                RenderAllAnnotations(pageIdx);   // redraw on the correct page's canvas
             }
             if (_currentTool != EditTool.Text) HideTextSettings();
         }
@@ -6500,6 +8032,11 @@ namespace KillerPDF
             if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 CopySelectedText();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                PasteFromClipboard();
                 e.Handled = true;
             }
             else if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
@@ -6524,7 +8061,17 @@ namespace KillerPDF
             }
             else if (e.Key == Key.Escape && ShortcutOverlay.Visibility == Visibility.Visible)
             {
-                ShortcutOverlay.Visibility = Visibility.Collapsed;
+                FadeOverlayOut(ShortcutOverlay);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape && AboutOverlay.Visibility == Visibility.Visible)
+            {
+                FadeOverlayOut(AboutOverlay);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape && SettingsOverlay.Visibility == Visibility.Visible)
+            {
+                FadeOverlayOut(SettingsOverlay);
                 e.Handled = true;
             }
             else if (e.Key == Key.Escape && _searchBar is not null && _searchBar.Visibility == Visibility.Visible)
@@ -6534,8 +8081,22 @@ namespace KillerPDF
             }
             else if (e.Key == Key.OemQuestion && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                ShortcutOverlay.Visibility = ShortcutOverlay.Visibility == Visibility.Visible
-                    ? Visibility.Collapsed : Visibility.Visible;
+                if (ShortcutOverlay.Visibility == Visibility.Visible) FadeOverlayOut(ShortcutOverlay);
+                else FadeOverlayIn(ShortcutOverlay);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.F1)
+            {
+                // Toggle the shortcuts overlay (conventional Help key, alongside Ctrl+?).
+                if (ShortcutOverlay.Visibility == Visibility.Visible) FadeOverlayOut(ShortcutOverlay);
+                else FadeOverlayIn(ShortcutOverlay);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.F2)
+            {
+                // Toggle the About dialog.
+                if (AboutOverlay.Visibility == Visibility.Visible) FadeOverlayOut(AboutOverlay);
+                else ShowAboutOverlay();
                 e.Handled = true;
             }
             else if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.Control)
@@ -6543,14 +8104,14 @@ namespace KillerPDF
                 Print_Click(this, e);
                 e.Handled = true;
             }
-            else if (e.Key == Key.Delete && _selectedAnnotation is not null)
+            else if (e.Key == Key.Delete && (_selectedAnnotation is not null || _selectedSet.Count > 0))
             {
                 DeleteSelected();
                 e.Handled = true;
             }
             else if (e.Key == Key.Z && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                Undo_Click(this, e);
+                if (!e.IsRepeat) Undo_Click(this, e);   // ignore key auto-repeat so one press = one undo
                 e.Handled = true;
             }
             else if (e.Key == Key.S && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
@@ -6576,6 +8137,16 @@ namespace KillerPDF
             else if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 NewDocument();
+                e.Handled = true;
+            }
+            // Bare-key tool switches. Only when a document is open, no modifier is held, and no
+            // overlay is up (and not while typing - guarded at the top of this handler).
+            else if (Keyboard.Modifiers == ModifierKeys.None && _doc is not null
+                     && ShortcutOverlay.Visibility != Visibility.Visible
+                     && AboutOverlay.Visibility    != Visibility.Visible
+                     && SettingsOverlay.Visibility != Visibility.Visible
+                     && TryToolShortcut(e.Key))
+            {
                 e.Handled = true;
             }
             else if ((e.Key == Key.Left || e.Key == Key.Up) && Keyboard.Modifiers == ModifierKeys.None)
@@ -6635,6 +8206,27 @@ namespace KillerPDF
             }
         }
 
+        // Maps a bare key to an editing tool. Returns false for any other key so the caller's
+        // shortcut chain continues. Mirrors the toolbar tool buttons exactly - Signature routes
+        // through its button handler so the signature picker opens (a bare SetTool would only arm
+        // the tool without showing the menu).
+        private bool TryToolShortcut(Key key)
+        {
+            switch (key)
+            {
+                case Key.V: SetTool(EditTool.Select);        return true;
+                case Key.T: SetTool(EditTool.Text);          return true;
+                case Key.H: SetTool(EditTool.Highlight);     return true;
+                case Key.K: SetTool(EditTool.Strikethrough); return true;
+                case Key.U: SetTool(EditTool.Underline);     return true;
+                case Key.D: SetTool(EditTool.Draw);          return true;
+                case Key.C: SetTool(EditTool.Crop);          return true;
+                case Key.I: SetTool(EditTool.Image);         return true;
+                case Key.G: ToolSignature_Click(this, new RoutedEventArgs()); return true;
+                default:    return false;
+            }
+        }
+
         // ============================================================
         // Annotation management
         // ============================================================
@@ -6644,7 +8236,7 @@ namespace KillerPDF
             if (!_annotations.ContainsKey(annotation.PageIndex))
                 _annotations[annotation.PageIndex] = [];
             _annotations[annotation.PageIndex].Add(annotation);
-            _undoStack.Push(new UndoEntry(UndoKind.Annotation, annotation.PageIndex, WasDirty: _isDirty));
+            _undoStack.Push(new UndoEntry(UndoKind.Annotation, annotation.PageIndex, WasDirty: _isDirty, Annot: annotation));
             MarkDirty();
         }
 
@@ -6694,14 +8286,15 @@ namespace KillerPDF
                         RenderTextAnnotation(ta);
                         break;
                     case HighlightAnnotation ha:
+                        var hr = ha.DrawRect();
                         var rect = new Rectangle
                         {
                             Fill = new SolidColorBrush(ha.GetColor()),
-                            Width = ha.Bounds.Width,
-                            Height = ha.Bounds.Height
+                            Width = hr.Width,
+                            Height = hr.Height
                         };
-                        Canvas.SetLeft(rect, ha.Bounds.X);
-                        Canvas.SetTop(rect, ha.Bounds.Y);
+                        Canvas.SetLeft(rect, hr.X);
+                        Canvas.SetTop(rect, hr.Y);
                         _activeCanvas.Children.Add(rect);
                         break;
                     case InkAnnotation ia:
@@ -6824,6 +8417,13 @@ namespace KillerPDF
 
         private void Undo_Click(object sender, RoutedEventArgs e)
         {
+            // Commit any in-progress text box first so its annotation is on the undo stack and the
+            // order is deterministic. Otherwise the text box commits asynchronously (LostFocus fires
+            // when a re-render clears the canvas), which races the undo and makes a press appear to
+            // do nothing - the cause of "second Ctrl+Z did nothing" after placing several texts.
+            if (_activeTextBox is not null)
+                CommitActiveTextBox();
+
             if (_undoStack.Count == 0)
             {
                 SetStatus("Nothing to undo");
@@ -6835,12 +8435,43 @@ namespace KillerPDF
             if (entry.Kind == UndoKind.Annotation)
             {
                 int pageIdx = entry.PageIdx;
-                if (_annotations.ContainsKey(pageIdx) && _annotations[pageIdx].Count > 0)
-                    _annotations[pageIdx].RemoveAt(_annotations[pageIdx].Count - 1);
+                if (_annotations.TryGetValue(pageIdx, out var pageList) && pageList.Count > 0)
+                {
+                    // Remove the exact annotation this entry recorded (not just the last one in the
+                    // list), so undo stays correct even when annotations were re-edited or reordered.
+                    if (entry.Annot is not null)
+                        pageList.Remove(entry.Annot);
+                    else
+                        pageList.RemoveAt(pageList.Count - 1);
+                }
                 ClearSelection();
                 RenderAllAnnotations(pageIdx);
                 MarkDirty(entry.WasDirty);
                 SetStatus("Undid last annotation");
+            }
+            else if (entry.Kind == UndoKind.StampBatch && entry.Pages is not null)
+            {
+                // Page-number stamping adds one annotation per page as a single action; remove the
+                // last annotation from each stamped page in one undo.
+                foreach (int p in entry.Pages)
+                    if (_annotations.TryGetValue(p, out var list) && list.Count > 0)
+                        list.RemoveAt(list.Count - 1);
+                ClearSelection();
+                foreach (int p in entry.Pages)
+                    if (_continuousCanvases.ContainsKey(p) || p == PageList.SelectedIndex)
+                        RenderAllAnnotations(p);
+                MarkDirty(entry.WasDirty);
+                SetStatus("Removed stamped page numbers");
+            }
+            else if (entry.Kind == UndoKind.ClearAnnotations && entry.AnnotSnapshot is not null)
+            {
+                // Restore every page's annotations that the clear removed, in one undo.
+                foreach (var kv in entry.AnnotSnapshot)
+                    _annotations[kv.Key] = [.. kv.Value];
+                ClearSelection();
+                RenderAnnotationsOnAllVisiblePages();
+                MarkDirty(entry.WasDirty);
+                SetStatus("Restored cleared annotations");
             }
             else // Document snapshot
             {
@@ -6892,18 +8523,133 @@ namespace KillerPDF
             }
         }
 
+        // Re-renders annotations on every page that currently has a visible surface: each overlay
+        // tracked by a multi-page view, plus the single-page canvas. RenderAllAnnotations re-adds
+        // form fields, so forms survive the refresh.
+        private void RenderAnnotationsOnAllVisiblePages()
+        {
+            if (_continuousCanvases.Count > 0)
+                foreach (var p in _continuousCanvases.Keys.ToList())
+                    RenderAllAnnotations(p);
+            else if (PageList.SelectedIndex >= 0)
+                RenderAllAnnotations(PageList.SelectedIndex);
+        }
+
+        // Context-menu "Clear Page Annotations": removes annotations on the current page only.
         private void ClearAnnotations_Click(object sender, RoutedEventArgs e)
         {
+            if (_activeTextBox is not null) CommitActiveTextBox();
             int pageIdx = PageList.SelectedIndex;
             if (pageIdx < 0) return;
-            if (_annotations.ContainsKey(pageIdx) && _annotations[pageIdx].Count > 0)
+            if (_annotations.TryGetValue(pageIdx, out var list) && list.Count > 0)
             {
-                _annotations[pageIdx].Clear();
+                // Snapshot this page so the clear is a single undo, then drop the annotations.
+                var snap = new Dictionary<int, List<PageAnnotation>> { [pageIdx] = [.. list] };
+                _undoStack.Push(new UndoEntry(UndoKind.ClearAnnotations, WasDirty: _isDirty, AnnotSnapshot: snap));
+                _annotations.Remove(pageIdx);
                 MarkDirty();
             }
             ClearSelection();
-            _annotationCanvas.Children.Clear();
+            // Redraw the page on whichever surface it lives on (overlay in multi-page views, the
+            // single canvas otherwise) so the cleared page actually updates in continuous/grid mode.
+            RenderAllAnnotations(pageIdx);
             SetStatus("Cleared annotations on this page");
+        }
+
+        // Toolbar "Clear All Annotations": removes annotations across the whole document in one undo.
+        private void ClearAllAnnotations_Click(object sender, RoutedEventArgs e)
+        {
+            if (_doc is null) return;
+            if (_activeTextBox is not null) CommitActiveTextBox();
+
+            int total = _annotations.Values.Sum(l => l.Count);
+            if (total == 0) { SetStatus("No annotations to clear"); return; }
+
+            // Snapshot every page so a single Ctrl+Z restores the whole document's annotations.
+            var snapshot = new Dictionary<int, List<PageAnnotation>>();
+            foreach (var kv in _annotations)
+                if (kv.Value.Count > 0) snapshot[kv.Key] = [.. kv.Value];
+            _undoStack.Push(new UndoEntry(UndoKind.ClearAnnotations, WasDirty: _isDirty, AnnotSnapshot: snapshot));
+
+            _annotations.Clear();
+            ClearSelection();
+            RenderAnnotationsOnAllVisiblePages();
+            MarkDirty();
+            SetStatus($"Cleared all annotations ({total})");
+        }
+
+        // Stamps a page number onto every page as a text annotation (so it renders, saves, and
+        // flattens like any other annotation). One undo removes the whole batch.
+        private void StampPageNumbers()
+        {
+            if (_doc is null) { SetStatus("Open a document first"); return; }
+
+            var dlg = new StampNumbersDialog(this);
+            if (dlg.ShowDialog() != true) return;
+
+            int start    = dlg.StartNumber;
+            string fmt   = dlg.Format;
+            double ptSize = dlg.FontSizePt;
+            int posH     = dlg.PosH;   // 0 left, 1 center, 2 right
+            int posV     = dlg.PosV;   // 0 top, 2 bottom
+            int n        = _doc.PageCount;
+            bool wasDirty = _isDirty;
+            double ppd   = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
+            var stamped = new List<int>();
+            for (int i = 0; i < n; i++)
+            {
+                double pw = _doc.Pages[i].Width.Point;
+                double phpt = _doc.Pages[i].Height.Point;
+                if (_pageRotations.TryGetValue(i, out int rot) && (rot == 90 || rot == 270))
+                    (pw, phpt) = (phpt, pw);
+                double maxDim = Math.Max(1, Math.Max(pw, phpt));
+                double rdW = 2048.0 * pw / maxDim;
+                double rdH = 2048.0 * phpt / maxDim;
+
+                // Point size -> render-dim units (matches PlaceTextBox so it exports as real points).
+                double fontCanvas = ptSize * rdH / Math.Max(1, phpt);
+
+                string text = fmt.Replace("{n}", (start + i).ToString())
+                                 .Replace("{N}", n.ToString());
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                var ft = new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture,
+                    FlowDirection.LeftToRight, new Typeface("Segoe UI"), fontCanvas, Brushes.Black, ppd);
+                double tw = ft.WidthIncludingTrailingWhitespace, th = ft.Height;
+                double mx = rdW * 0.05, my = rdH * 0.04;
+                double x = posH == 0 ? mx : posH == 2 ? rdW - tw - mx : (rdW - tw) / 2;
+                double y = posV == 0 ? my : rdH - th - my;
+
+                var ta = new TextAnnotation
+                {
+                    PageIndex = i,
+                    Position  = new Point(x, y),
+                    Content   = text,
+                    FontSize  = fontCanvas
+                };
+                ta.SetColor(Colors.Black);
+                if (!_annotations.TryGetValue(i, out var list)) { list = []; _annotations[i] = list; }
+                list.Add(ta);
+                stamped.Add(i);
+            }
+
+            if (stamped.Count == 0) { SetStatus("Nothing to stamp"); return; }
+
+            _undoStack.Push(new UndoEntry(UndoKind.StampBatch, Pages: [.. stamped], WasDirty: wasDirty));
+            MarkDirty();
+
+            if (_viewMode == ViewMode.Continuous)
+            {
+                foreach (int p in stamped)
+                    if (_continuousCanvases.ContainsKey(p)) RenderAllAnnotations(p);
+            }
+            else
+            {
+                int cur = PageList.SelectedIndex < 0 ? 0 : PageList.SelectedIndex;
+                RenderAllAnnotations(cur);
+            }
+            SetStatus($"Stamped page numbers on {stamped.Count} page(s)");
         }
 
         // ============================================================
@@ -6915,9 +8661,12 @@ namespace KillerPDF
             _isDirty = dirty;
             if (_saveAsBtnRef != null)
             {
-                _saveAsBtnRef.Foreground = dirty
-                    ? new SolidColorBrush(Color.FromRgb(0xff, 0xa5, 0x00)) // orange = unsaved
-                    : (SolidColorBrush)FindResource("Accent");
+                if (dirty)
+                    // orange = unsaved
+                    _saveAsBtnRef.Foreground = new SolidColorBrush(Color.FromRgb(0xff, 0xa5, 0x00));
+                else
+                    // AccentLogo is green (visible) in every theme and tracks theme switches
+                    _saveAsBtnRef.SetResourceReference(Control.ForegroundProperty, "AccentLogo");
             }
         }
 
@@ -6938,12 +8687,14 @@ namespace KillerPDF
             _doc.Close();
             _doc = null;
             _currentFile = null;
+            App.RemoveSetting("LastFile");   // don't reopen a manually-closed file on next launch (Issue #75)
             _activeTextBox = null;   // cancel any in-progress typewriter edit before canvas clear
             _annotations.Clear();
             _undoStack.Clear();
             _renderDims.Clear();
             _formTextValues.Clear();
             _formCheckValues.Clear();
+            _formFontSizes.Clear();
             _formRadioValues.Clear();
             _allSearchRects.Clear();
             _searchResultPages.Clear();
@@ -6954,6 +8705,7 @@ namespace KillerPDF
             _annotationCanvas.Children.Clear();
             FileNameLabel.Text = "";
             DropZone.Visibility = Visibility.Visible;
+            PopulateRecentFilesList();   // refresh the empty-state recent list
             PagePreviewPanel.Visibility = Visibility.Collapsed;
             CloseSearchBar();
             HideDrawSettings();
@@ -7017,6 +8769,142 @@ namespace KillerPDF
         {
             var dlg = new OpenFileDialog { Filter = "PDF files|*.pdf", Title = "Open PDF" };
             if (dlg.ShowDialog(this) == true) OpenFile(dlg.FileName);
+        }
+
+        // Dropdown next to the Open button: the recent-files list.
+        private void OpenRecent_Click(object sender, RoutedEventArgs e)
+        {
+            var menu = new ContextMenu();
+            TextOptions.SetTextFormattingMode(menu, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(menu, TextRenderingMode.Grayscale);
+
+            var recents = App.GetRecentFiles();
+            if (recents.Count == 0)
+            {
+                menu.Items.Add(new MenuItem { Header = "No recent files", IsEnabled = false });
+            }
+            else
+            {
+                foreach (var p in recents)
+                {
+                    string path = p;   // capture
+                    var item = MakeMenuItem(System.IO.Path.GetFileName(path), (_, _) =>
+                    {
+                        if (System.IO.File.Exists(path)) OpenFile(path);
+                        else KillerDialog.Show(this, $"File not found:\n{path}", "KillerPDF",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+                    });
+                    item.ToolTip = path;
+                    menu.Items.Add(item);
+                }
+                menu.Items.Add(new Separator());
+                menu.Items.Add(MakeMenuItem("Clear list", (_, _) => App.ClearRecentFiles()));
+            }
+
+            menu.PlacementTarget = (UIElement)sender;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+
+        // Fills the empty-state "Recent" list with clickable filenames (hidden when there are none).
+        private void PopulateRecentFilesList()
+        {
+            if (RecentFilesList is null || RecentFilesBox is null) return;
+            RecentFilesList.Items.Clear();
+            var recents = App.GetRecentFiles();
+            if (recents.Count == 0) { RecentFilesBox.Visibility = Visibility.Collapsed; return; }
+            RecentFilesBox.Visibility = Visibility.Visible;
+            var fam = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            foreach (var p in recents)
+            {
+                string path = p;   // capture
+                bool exists = System.IO.File.Exists(path);
+                string dir = System.IO.Path.GetDirectoryName(path) ?? "";
+                string dateStr = exists
+                    ? $"{System.IO.File.GetLastWriteTime(path):MMM d, yyyy}"
+                    : "missing";
+
+                var name = new TextBlock
+                {
+                    Text         = System.IO.Path.GetFileName(path),
+                    FontFamily   = fam,
+                    FontSize     = 13,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                // DynamicResource so the color tracks theme switches (FindResource would freeze
+                // whatever theme was active when the list was built).
+                name.SetResourceReference(TextBlock.ForegroundProperty, exists ? "TextPrimary" : "TextDim");
+
+                // File path line (slightly brighter) sits above the date line (slightly dimmer).
+                var pathTb = new TextBlock
+                {
+                    Text         = dir,
+                    FontFamily   = fam,
+                    FontSize     = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin       = new Thickness(0, 2, 0, 0)
+                };
+                pathTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+
+                var dateTb = new TextBlock
+                {
+                    Text         = dateStr,
+                    FontFamily   = fam,
+                    FontSize     = 11,
+                    Opacity      = 0.6,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin       = new Thickness(0, 1, 0, 0)
+                };
+                dateTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+
+                var stack = new StackPanel();
+                stack.Children.Add(name);
+                stack.Children.Add(pathTb);
+                stack.Children.Add(dateTb);
+
+                var row = new Border
+                {
+                    Background    = System.Windows.Media.Brushes.Transparent,
+                    CornerRadius  = new CornerRadius(4),
+                    Padding       = new Thickness(8, 6, 8, 6),
+                    Margin        = new Thickness(0, 1, 0, 1),
+                    Cursor        = Cursors.Hand,
+                    Child         = stack,
+                    ToolTip       = path
+                };
+                row.MouseEnter += (_, _) => row.Background = (SolidColorBrush)FindResource("BgHover");
+                row.MouseLeave += (_, _) => row.Background = System.Windows.Media.Brushes.Transparent;
+                row.MouseLeftButtonDown += (_, ev) =>
+                {
+                    ev.Handled = true;   // don't bubble to the DropZone "click to browse" handler
+                    if (System.IO.File.Exists(path)) OpenFile(path);
+                    else KillerDialog.Show(this, $"File not found:\n{path}", "KillerPDF",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                };
+                RecentFilesList.Items.Add(row);
+            }
+        }
+
+        // Dropdown next to the Save button: explicit Save / Save As.
+        private void SaveMenu_Click(object sender, RoutedEventArgs e)
+        {
+            var menu = new ContextMenu();
+            TextOptions.SetTextFormattingMode(menu, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(menu, TextRenderingMode.Grayscale);
+
+            if (_doc is null)
+            {
+                menu.Items.Add(new MenuItem { Header = "Nothing to save", IsEnabled = false });
+            }
+            else
+            {
+                menu.Items.Add(MakeMenuItem("Save", (_, _) => SaveInPlace(), "Ctrl+S"));
+                menu.Items.Add(MakeMenuItem("Save As...", (s2, e2) => SaveAs_Click(s2, e2), "Ctrl+Shift+S"));
+            }
+
+            menu.PlacementTarget = (UIElement)sender;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
         }
 
         private void Merge_Click(object sender, RoutedEventArgs e)
@@ -7348,7 +9236,19 @@ namespace KillerPDF
                     DrawAnnotationsOnDocument();
                     _doc.Save(saveTarget);
                     _doc.Close();
-                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                    try
+                    {
+                        _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                    }
+                    catch (Exception saveOpenEx) when (IsXRefException(saveOpenEx))
+                    {
+                        var fixedPath = App.MakeTempFile("savefixed");
+                        if (!TryImportRepairToPath(tempClean, fixedPath)
+                            && !TryPdfiumSaveWithZeroRotations(tempClean, fixedPath))
+                            throw;
+                        tempClean = fixedPath;
+                        _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                    }
                     _currentFile = tempClean;
                 }
                 else
@@ -7407,7 +9307,19 @@ namespace KillerPDF
                     DrawAnnotationsOnDocument();
                     _doc.Save(dlg.FileName);
                     _doc.Close();
-                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                    try
+                    {
+                        _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                    }
+                    catch (Exception saveOpenEx) when (IsXRefException(saveOpenEx))
+                    {
+                        var fixedPath = App.MakeTempFile("savefixed");
+                        if (!TryImportRepairToPath(tempClean, fixedPath)
+                            && !TryPdfiumSaveWithZeroRotations(tempClean, fixedPath))
+                            throw;
+                        tempClean = fixedPath;
+                        _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                    }
                     _currentFile = tempClean;
                     _originalFile = dlg.FileName;
                     FileNameLabel.Text = System.IO.Path.GetFileName(dlg.FileName);
@@ -7449,7 +9361,19 @@ namespace KillerPDF
                 DrawAnnotationsOnDocument();
                 _doc.Save(tempBurned);
                 _doc.Close();
-                _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                try
+                {
+                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                }
+                catch (Exception saveOpenEx) when (IsXRefException(saveOpenEx))
+                {
+                    var fixedPath = App.MakeTempFile("savefixed");
+                    if (!TryImportRepairToPath(tempClean, fixedPath)
+                        && !TryPdfiumSaveWithZeroRotations(tempClean, fixedPath))
+                        throw;
+                    tempClean = fixedPath;
+                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                }
                 _currentFile = tempClean;
                 sourcePath = tempBurned;
             }
@@ -7596,6 +9520,69 @@ namespace KillerPDF
                 rootGrid.Children.Remove(overlay);
         }
 
+        // ---- generic busy overlay (indeterminate spinner) for blocking background work ----
+
+        /// <summary>
+        /// Dims the window and shows a spinning ring plus a message while a background task runs.
+        /// Returned Border is passed to HideBusyOverlay when the work completes.
+        /// </summary>
+        private Border ShowBusyOverlay(string message)
+        {
+            var spinner = new System.Windows.Shapes.Ellipse
+            {
+                Width = 34, Height = 34,
+                Stroke = AccentBrush(),
+                StrokeThickness = 3,
+                StrokeDashArray = [5.5, 3.5], // dashed ring reads as "spinning"
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 14),
+                RenderTransformOrigin = new Point(0.5, 0.5)
+            };
+            var rot = new RotateTransform();
+            spinner.RenderTransform = rot;
+            rot.BeginAnimation(RotateTransform.AngleProperty,
+                new DoubleAnimation(0, 360, new Duration(TimeSpan.FromSeconds(0.9)))
+                { RepeatBehavior = RepeatBehavior.Forever });
+
+            var text = new TextBlock
+            {
+                Text = message,
+                Foreground = Brushes.White,
+                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                FontSize = 14,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            var panel = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment   = VerticalAlignment.Center
+            };
+            panel.Children.Add(spinner);
+            panel.Children.Add(text);
+
+            var overlay = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(190, 0x12, 0x12, 0x12)),
+                Child = panel
+            };
+            Panel.SetZIndex(overlay, 10050); // above the Settings/Shortcuts/About overlays
+
+            // Add as a sibling of the full-window overlays so it covers the whole window.
+            if (SettingsOverlay?.Parent is Grid host)
+            {
+                if (host.RowDefinitions.Count > 0) Grid.SetRowSpan(overlay, host.RowDefinitions.Count);
+                host.Children.Add(overlay);
+            }
+            else
+            {
+                RootClipGrid?.Children.Add(overlay);
+            }
+            return overlay;
+        }
+
+        private static void HideBusyOverlay(Border overlay)
+            => (overlay.Parent as Panel)?.Children.Remove(overlay);
+
         /// <summary>
         /// Encodes raw BGRA pixel data from pdfium to PNG without touching the UI thread.
         /// GDI+ Format32bppArgb is BGRA in memory — matches pdfium output exactly.
@@ -7616,7 +9603,7 @@ namespace KillerPDF
             finally { pin.Free(); }
         }
 
-        private async void Print_Click(object sender, RoutedEventArgs e)
+        private void Print_Click(object sender, RoutedEventArgs e)
         {
             if (_doc is null || _currentFile is null) { KillerDialog.Show(this, "Open a PDF first."); return; }
             CommitActiveTextBox();
@@ -7634,7 +9621,22 @@ namespace KillerPDF
                 _doc.Save(printPath);
                 tempFlattened = printPath;
                 _doc.Close();
-                _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                try
+                {
+                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                }
+                catch (Exception printOpenEx) when (IsXRefException(printOpenEx))
+                {
+                    // PdfSharpCore can write a snapshot whose xref offset confuses its own reader
+                    // ("Unexpected token 'xref'"). Repair via Import then PDFium, same as save/undo,
+                    // instead of crashing the print flow.
+                    var fixedPath = App.MakeTempFile("printfixed");
+                    if (!TryImportRepairToPath(tempClean, fixedPath)
+                        && !TryPdfiumSaveWithZeroRotations(tempClean, fixedPath))
+                        throw;
+                    tempClean = fixedPath;
+                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
+                }
                 _currentFile = tempClean;
             }
             else
@@ -7644,51 +9646,63 @@ namespace KillerPDF
 
             int pageCount = _doc.PageCount;
 
-            // Rasterize every page, then hand them to our own preview window. WPF's OS
-            // PrintDialog cannot show a preview ("This app doesn't support print preview"),
-            // so KillerPDF renders the preview and drives printing itself.
-            var overlay = ShowFlattenProgress(pageCount, "Preparing");
-            bool overlayHidden = false;
-            byte[][]? pngPages = null;
-            int[]?    rasterW  = null;
-            int[]?    rasterH  = null;
-
-            try
+            // Each page's true physical size in DIPs (96/inch) so the dialog can offer an exact
+            // "actual size" / custom scale. Computed on the UI thread (PdfSharp isn't thread-safe).
+            var pageDipW = new double[pageCount];
+            var pageDipH = new double[pageCount];
+            for (int i = 0; i < pageCount; i++)
             {
-                // Rasterize all pages on background thread — keeps UI responsive
-                await Task.Run(() =>
+                double pw = _doc.Pages[i].Width.Point;
+                double ph = _doc.Pages[i].Height.Point;
+                if (_pageRotations.TryGetValue(i, out int rot) && (rot == 90 || rot == 270))
+                    (pw, ph) = (ph, pw);
+                pageDipW[i] = pw * 96.0 / 72.0;
+                pageDipH[i] = ph * 96.0 / 72.0;
+            }
+
+            // Open the preview window immediately. Pages rasterize on a background thread and
+            // stream in via SetRenderedPage, so the window appears at once and the app stays
+            // responsive on large files. WPF's OS PrintDialog can't show a preview, so KillerPDF
+            // renders it and drives printing itself.
+            var preview = new PrintPreviewWindow(this, pageCount, pageDipW, pageDipH);
+            string  renderPath = printPath;
+            string? cleanup    = tempFlattened;
+
+            _ = Task.Run(() =>
+            {
+                try
                 {
-                    pngPages = new byte[pageCount][];
-                    rasterW  = new int[pageCount];
-                    rasterH  = new int[pageCount];
-                    using var docReader = DocLib.Instance.GetDocReader(printPath, new PageDimensions(1536, 1536));
+                    using var docReader = DocLib.Instance.GetDocReader(renderPath, new PageDimensions(1536, 1536));
                     for (int i = 0; i < pageCount; i++)
                     {
+                        if (preview.Cancelled) return;
                         using var pr = docReader.GetPageReader(i);
                         int w = pr.GetPageWidth();
                         int h = pr.GetPageHeight();
-                        pngPages[i] = RenderToPng(pr.GetImage(), w, h);
-                        rasterW[i]  = w;
-                        rasterH[i]  = h;
-                        int captured = i;
-                        Dispatcher.Invoke(() => UpdateFlattenProgress(overlay, captured + 1, pageCount));
+                        byte[] png = RenderToPng(pr.GetImage(), w, h);
+                        BitmapSource src;
+                        using (var ms = new MemoryStream(png))
+                            src = BitmapFrame.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                        src.Freeze();   // frozen so it can cross back to the UI thread
+                        int ci = i;
+                        try { preview.Dispatcher.Invoke(() => preview.SetRenderedPage(ci, src, w, h)); }
+                        catch { return; }   // window closed mid-render
                     }
-                });
-
-                // Decode to frozen BitmapSources on the UI thread for the preview window.
-                var sources = new BitmapSource[pageCount];
-                for (int i = 0; i < pageCount; i++)
-                {
-                    using var ms = new MemoryStream(pngPages![i]);
-                    var src = BitmapFrame.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-                    src.Freeze();
-                    sources[i] = src;
+                    if (!preview.Cancelled)
+                        try { preview.Dispatcher.Invoke(preview.FinishLoading); } catch { }
                 }
+                catch (Exception ex)
+                {
+                    try { preview.Dispatcher.Invoke(() => preview.LoadFailed(ex.Message)); } catch { }
+                }
+                finally
+                {
+                    if (cleanup != null) try { System.IO.File.Delete(cleanup); } catch { }
+                }
+            });
 
-                HideFlattenProgress(overlay);
-                overlayHidden = true;
-
-                var preview = new PrintPreviewWindow(this, sources, rasterW!, rasterH!);
+            try
+            {
                 if (preview.ShowDialog() == true)
                     SetStatus(string.Format(Loc("Str_Printed"), preview.PrintedPageCount));
             }
@@ -7696,11 +9710,6 @@ namespace KillerPDF
             {
                 try { KillerDialog.Show(this, $"Print failed:\n{ex.GetType().Name}: {ex.Message}", "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error); }
                 catch { }
-            }
-            finally
-            {
-                if (!overlayHidden) try { HideFlattenProgress(overlay); } catch { }
-                if (tempFlattened != null) try { System.IO.File.Delete(tempFlattened); } catch { }
             }
         }
 
@@ -7752,9 +9761,10 @@ namespace KillerPDF
                         case HighlightAnnotation ha:
                             var hc = ha.GetColor();
                             var hBrush = new XSolidBrush(XColor.FromArgb(hc.A, hc.R, hc.G, hc.B));
+                            var hdr = ha.DrawRect();
                             gfx.DrawRectangle(hBrush,
-                                ha.Bounds.X * sx, ha.Bounds.Y * sy,
-                                ha.Bounds.Width * sx, ha.Bounds.Height * sy);
+                                hdr.X * sx, hdr.Y * sy,
+                                hdr.Width * sx, hdr.Height * sy);
                             break;
 
                         case InkAnnotation ia:
@@ -8020,12 +10030,18 @@ namespace KillerPDF
                 return;
             }
 
-            // Regular scroll: let the ScrollViewer handle it normally.
-            // At scroll boundaries, fall through to page navigation so the user
-            // can reach adjacent pages without touching the sidebar.
+            // Regular scroll. Grid and Continuous are a single scroll over the WHOLE document, so the
+            // wheel must never be hijacked for page navigation there - just let the ScrollViewer
+            // scroll. This is the fix for grid refusing to scroll: right after a zoom/column change
+            // the extent can momentarily measure as zero, and the old page-nav fallback below would
+            // fire instead of scrolling (and stick until a theme/view-mode switch forced a re-measure).
+            if (_viewMode == ViewMode.Grid || _viewMode == ViewMode.Continuous)
+                return;
+
+            // Single / Two-Page: a page often fits the viewport, so at the scroll boundary fall
+            // through to page navigation so the user can reach adjacent pages without the sidebar.
             if (PagePreviewPanel.ScrollableHeight <= 0)
             {
-                // No scrollable content — navigate pages directly.
                 e.Handled = true;
                 NavigatePageByWheel(e.Delta);
                 return;
@@ -8033,9 +10049,7 @@ namespace KillerPDF
 
             bool atTop    = PagePreviewPanel.VerticalOffset <= 0;
             bool atBottom = PagePreviewPanel.VerticalOffset >= PagePreviewPanel.ScrollableHeight - 1;
-            // In Continuous view the whole document is one scroll; don't hop pages at the
-            // boundary - just let it stop at the top/bottom.
-            if (_viewMode != ViewMode.Continuous && ((atTop && e.Delta > 0) || (atBottom && e.Delta < 0)))
+            if ((atTop && e.Delta > 0) || (atBottom && e.Delta < 0))
             {
                 e.Handled = true;
                 NavigatePageByWheel(e.Delta);
@@ -8069,15 +10083,15 @@ namespace KillerPDF
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
                     () => RefreshPageView(applyIdx));
 
-            // If the user has zoomed in far enough that the current bitmap would be
-            // upscaled by more than 20%, queue a deferred re-render at higher resolution.
-            // The timer debounces rapid Ctrl+scroll so we re-render only once per gesture.
-            if (applyIdx >= 0 && _zoomLevel > _lastRenderZoom * 1.20 && _doc is not null)
+            // If the user has zoomed in past ~10% of the last render, queue a deferred re-render at
+            // higher resolution so text re-sharpens quickly (especially on high-DPI displays, where
+            // the upscaled bitmap shows blur sooner). The timer debounces rapid Ctrl+scroll.
+            if (applyIdx >= 0 && _zoomLevel > _lastRenderZoom * 1.10 && _doc is not null)
             {
                 if (_rerenderTimer is null)
                 {
                     _rerenderTimer = new System.Windows.Threading.DispatcherTimer
-                        { Interval = TimeSpan.FromMilliseconds(400) };
+                        { Interval = TimeSpan.FromMilliseconds(250) };
                     _rerenderTimer.Tick += (_, _) =>
                     {
                         _rerenderTimer!.Stop();
@@ -8362,7 +10376,11 @@ namespace KillerPDF
                 {
                     if (!(e.OriginalSource is DependencyObject osc && IsWithinPageOverlay(osc)))
                     {
-                        int pg = NearestContinuousPage(e.GetPosition(_continuousPanel).Y);
+                        // Prefer the page centered in the viewport (kept in sync by scrolling) - it's
+                        // the page the user is looking at. Fall back to the nearest page by click Y.
+                        int pg = PageList.SelectedIndex;
+                        if (pg < 0 || !_continuousCanvases.ContainsKey(pg))
+                            pg = NearestContinuousPage(e.GetPosition(_continuousPanel).Y);
                         if (pg >= 0) _continuousCanvases.TryGetValue(pg, out target);
                     }
                 }
@@ -8380,6 +10398,10 @@ namespace KillerPDF
                 if (target is not null && target.Width > 0 && target.Height > 0)
                 {
                     _activeCanvas = target;
+                    // Pin the gesture surface/page so mouse-move/up resolve against this overlay
+                    // (a margin crop start doesn't go through Canvas_MouseLeftButtonDown).
+                    _gestureCanvas = target;
+                    _gesturePage   = target.Tag is int gt ? gt : PageList.SelectedIndex;
                     var p = e.GetPosition(target);
                     p.X = Math.Max(0, Math.Min(target.Width, p.X));
                     p.Y = Math.Max(0, Math.Min(target.Height, p.Y));
@@ -8487,12 +10509,24 @@ namespace KillerPDF
         // Drag/drop: page reorder
         // ============================================================
 
-        private void PageList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        private bool _pageDragArmed;
+        private void PageList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
             _dragStartPoint = e.GetPosition(null);
+            // Only arm a page-reorder drag when the press lands on a page thumbnail, not the
+            // scrollbar - otherwise grabbing the scrollbar starts a page-move drag (the "insert"
+            // cursor) instead of scrolling.
+            _pageDragArmed = false;
+            for (var d = e.OriginalSource as DependencyObject; d != null; d = VisualTreeHelper.GetParent(d))
+            {
+                if (d is System.Windows.Controls.Primitives.ScrollBar) break;
+                if (d is ListBoxItem) { _pageDragArmed = true; break; }
+            }
+        }
 
         private void PageList_PreviewMouseMove(object sender, MouseEventArgs e)
         {
-            if (e.LeftButton != MouseButtonState.Pressed) return;
+            if (!_pageDragArmed || e.LeftButton != MouseButtonState.Pressed) return;
             var diff = _dragStartPoint - e.GetPosition(null);
             if (Math.Abs(diff.X) > SystemParameters.MinimumHorizontalDragDistance ||
                 Math.Abs(diff.Y) > SystemParameters.MinimumVerticalDragDistance)
@@ -8590,6 +10624,7 @@ namespace KillerPDF
                 CommitActiveTextBox();
                 ClearSelection();
                 ClearTextSelection();
+                PageList.ScrollIntoView(PageList.SelectedItem);   // keep the sidebar thumbnail in view
                 if (_viewMode == ViewMode.Continuous)
                 {
                     _pageJumpBox.Text = (PageList.SelectedIndex + 1).ToString();
@@ -8613,6 +10648,12 @@ namespace KillerPDF
                         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
                             (Action)(() => SetZoom(GridZoomForN(Math.Min(_doc?.PageCount ?? 1, 3)))));
                     }
+                    else if (PageList.SelectedIndex < _pageContentPanel.Children.Count
+                             && _pageContentPanel.Children[PageList.SelectedIndex] is FrameworkElement gridTile)
+                    {
+                        // Scroll the chosen page's tile into view (BringIntoView accounts for the zoom transform).
+                        gridTile.BringIntoView();
+                    }
                     return;
                 }
                 PagePreviewPanel.ScrollToTop();
@@ -8630,14 +10671,14 @@ namespace KillerPDF
 
         private void ShortcutHelp_Click(object sender, RoutedEventArgs e)
         {
-            ShortcutOverlay.Visibility = ShortcutOverlay.Visibility == Visibility.Visible
-                ? Visibility.Collapsed : Visibility.Visible;
+            if (ShortcutOverlay.Visibility == Visibility.Visible) FadeOverlayOut(ShortcutOverlay);
+            else FadeOverlayIn(ShortcutOverlay);
         }
 
         private void ShortcutOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             // Click on the dim backdrop closes the overlay.
-            ShortcutOverlay.Visibility = Visibility.Collapsed;
+            FadeOverlayOut(ShortcutOverlay);
         }
 
         private void ShortcutOverlayCard_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -8648,7 +10689,7 @@ namespace KillerPDF
 
         private void ShortcutOverlayClose_Click(object sender, RoutedEventArgs e)
         {
-            ShortcutOverlay.Visibility = Visibility.Collapsed;
+            FadeOverlayOut(ShortcutOverlay);
         }
 
         // ── About overlay ───────────────────────────────────────────────
@@ -8664,23 +10705,35 @@ namespace KillerPDF
             AboutThumbprintBlock.Text  = string.IsNullOrEmpty(sigThumbprint) ? "(none)" : sigThumbprint;
             AboutSha256Block.Text      = Loc("Str_About_Computing");
 
-            // Logo block
+            // Reuse the main window's film-grain texture on the About card.
+            if (GrainBrush?.ImageSource != null) AboutGrainBrush.ImageSource = GrainBrush.ImageSource;
+
+            // Logo block: "Killer" in the primary colour, "PDF" in the brand green.
             AboutLogoBlock.Inlines.Clear();
-            var logoHl = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run("KillerPDF"))
+            var logoHl = new System.Windows.Documents.Hyperlink { TextDecorations = null };
+            logoHl.Inlines.Add(new System.Windows.Documents.Run("Killer")
             {
-                Foreground      = (System.Windows.Media.Brush)FindResource("Accent"),
-                TextDecorations = null
-            };
+                Foreground = (System.Windows.Media.Brush)FindResource("TextPrimary")
+            });
+            logoHl.Inlines.Add(new System.Windows.Documents.Run("PDF")
+            {
+                Foreground = (System.Windows.Media.Brush)FindResource("AccentLogo")
+            });
             logoHl.Click += (_, _) =>
                 Process.Start(new ProcessStartInfo("https://pdf.killertools.net") { UseShellExecute = true });
             AboutLogoBlock.Inlines.Add(logoHl);
 
             // Tagline block
             AboutTaglineBlock.Inlines.Clear();
-            AboutTaglineBlock.Inlines.Add(new System.Windows.Documents.Run("A fast, free PDF toolkit for Windows. Part of ")
-            {
-                Foreground = (System.Windows.Media.Brush)FindResource("TextDim")
-            });
+            // Localized tagline. {0} is the (untranslated) brand, so splitting on the placeholder
+            // keeps "Killer Tools" a styled, clickable link while the rest translates and the brand
+            // can sit anywhere in the sentence the language needs it.
+            var taglineDim = (System.Windows.Media.Brush)FindResource("TextSecondary");
+            var taglineText = Loc("Str_Tagline");
+            int taglineBrand = taglineText.IndexOf("{0}", StringComparison.Ordinal);
+            string taglinePre = taglineBrand >= 0 ? taglineText[..taglineBrand] : taglineText;
+            string taglineSuf = taglineBrand >= 0 ? taglineText[(taglineBrand + 3)..] : "";
+            AboutTaglineBlock.Inlines.Add(new System.Windows.Documents.Run(taglinePre) { Foreground = taglineDim });
             var ktHl = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run("Killer Tools"))
             {
                 Foreground      = (System.Windows.Media.Brush)FindResource("Accent"),
@@ -8689,10 +10742,7 @@ namespace KillerPDF
             ktHl.Click += (_, _) =>
                 Process.Start(new ProcessStartInfo("https://killertools.net") { UseShellExecute = true });
             AboutTaglineBlock.Inlines.Add(ktHl);
-            AboutTaglineBlock.Inlines.Add(new System.Windows.Documents.Run(".")
-            {
-                Foreground = (System.Windows.Media.Brush)FindResource("TextDim")
-            });
+            AboutTaglineBlock.Inlines.Add(new System.Windows.Documents.Run(taglineSuf) { Foreground = taglineDim });
 
             // Version block (clickable - opens GitHub release)
             AboutVersionBlock.Inlines.Clear();
@@ -8707,7 +10757,10 @@ namespace KillerPDF
                 { UseShellExecute = true });
             AboutVersionBlock.Inlines.Add(verHl);
 
-            AboutOverlay.Visibility = Visibility.Visible;
+            // Update check: hidden until/unless a newer release is confirmed online
+            AboutUpdateButton.Visibility = Visibility.Collapsed;
+            FadeOverlayIn(AboutOverlay);
+            CheckForUpdateAsync(System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
 
             // Compute SHA256 off the UI thread
             System.Threading.Tasks.Task.Run(() =>
@@ -8720,7 +10773,7 @@ namespace KillerPDF
 
         private void AboutOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            AboutOverlay.Visibility = Visibility.Collapsed;
+            FadeOverlayOut(AboutOverlay);
         }
 
         private void AboutOverlayCard_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -8730,7 +10783,151 @@ namespace KillerPDF
 
         private void AboutOverlayClose_Click(object sender, RoutedEventArgs e)
         {
-            AboutOverlay.Visibility = Visibility.Collapsed;
+            FadeOverlayOut(AboutOverlay);
+        }
+
+        // Quietly checks GitHub for a newer release when the About dialog opens. Runs only on
+        // demand (no background service), times out fast, and silently does nothing if there is
+        // no internet or the request fails. Shows the update button only if a newer tag exists.
+        private async void CheckForUpdateAsync(Version? current)
+        {
+            if (current is null) return;
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("KillerPDF-UpdateCheck");
+                var json = await http.GetStringAsync(
+                    "https://api.github.com/repos/SteveTheKiller/KillerPDF/releases/latest")
+                    .ConfigureAwait(false);
+
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("tag_name", out var tagEl)) return;
+                var tag = tagEl.GetString();
+                if (string.IsNullOrWhiteSpace(tag)) return;
+                if (!Version.TryParse(tag!.TrimStart('v', 'V').Trim(), out var latest)) return;
+
+                var cur = new Version(current.Major, current.Minor, current.Build < 0 ? 0 : current.Build);
+                var lat = new Version(latest.Major, latest.Minor, latest.Build < 0 ? 0 : latest.Build);
+                if (lat <= cur) return;
+
+                await Dispatcher.BeginInvoke((Action)(() =>
+                {
+                    _updateTag = $"v{lat.ToString(3)}";
+                    AboutUpdateText.Text = $"Update available: {_updateTag}";
+                    AboutUpdateButton.Visibility = Visibility.Visible;
+                }));
+            }
+            catch { /* offline, timeout, or API error - quietly do nothing */ }
+        }
+
+        private string? _updateTag;   // "vX.Y.Z" of the available update, set by CheckForUpdateAsync
+
+        private void AboutUpdateButton_Click(object sender, RoutedEventArgs e) => DoSelfUpdateAsync();
+
+        // One-click self-update: downloads the released exe, verifies it against the published
+        // SHA256SUMS.txt, then hands off to a small batch that waits for this process to exit,
+        // swaps the exe in place, and relaunches with the currently-open PDF. Falls back to the
+        // releases page if anything fails (offline, checksum mismatch, unwritable location).
+        private async void DoSelfUpdateAsync()
+        {
+            var tag = _updateTag;
+            if (string.IsNullOrEmpty(tag)) return;
+
+            if (_isDirty)
+            {
+                KillerDialog.Show(this, "Please save your changes before updating.",
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var confirm = KillerDialog.Show(this,
+                $"Download and install KillerPDF {tag}?\n\nThe app will close and reopen automatically.",
+                "KillerPDF", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.OK) return;
+
+            AboutUpdateButton.IsEnabled = false;
+            AboutUpdateText.Text = "Downloading...";
+
+            string? newExe = null;
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(90) };
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("KillerPDF-UpdateCheck");
+
+                var exeUrl  = $"https://github.com/SteveTheKiller/KillerPDF/releases/download/{tag}/KillerPDF.exe";
+                var sumsUrl = $"https://raw.githubusercontent.com/SteveTheKiller/KillerPDF/{tag}/SHA256SUMS.txt";
+
+                var exeBytes = await http.GetByteArrayAsync(exeUrl);
+                var sumsTxt  = await http.GetStringAsync(sumsUrl);
+
+                // Find the expected hash for KillerPDF.exe
+                string? expected = null;
+                foreach (var line in sumsTxt.Replace("\r", "").Split('\n'))
+                {
+                    if (line.TrimStart().StartsWith("KillerPDF.exe", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var parts = line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 2) expected = parts[^1];
+                        break;
+                    }
+                }
+                if (string.IsNullOrEmpty(expected)) throw new Exception("checksum entry not found");
+
+                string actual;
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                    actual = BitConverter.ToString(sha.ComputeHash(exeBytes)).Replace("-", "");
+                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("checksum mismatch");
+
+                newExe = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"KillerPDF_update_{Guid.NewGuid():N}.exe");
+                File.WriteAllBytes(newExe, exeBytes);
+            }
+            catch
+            {
+                // Offline, timed out, or verification failed: restore the button and open the
+                // releases page so the user can update manually.
+                AboutUpdateButton.IsEnabled = true;
+                AboutUpdateText.Text = $"Update available: {tag}";
+                try { Process.Start(new ProcessStartInfo(
+                    "https://github.com/SteveTheKiller/KillerPDF/releases/latest") { UseShellExecute = true }); }
+                catch { }
+                return;
+            }
+
+            // Apply the update after we exit, then relaunch reopening the current PDF.
+            try
+            {
+                var curExe = Process.GetCurrentProcess().MainModule!.FileName;
+                var reopen = _originalFile ?? _currentFile;
+                var pid    = Process.GetCurrentProcess().Id;
+                var relArg = string.IsNullOrEmpty(reopen) ? "" : $" \"{reopen}\"";
+                var bat    = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"killerpdf_update_{Guid.NewGuid():N}.bat");
+
+                File.WriteAllText(bat,
+                    "@echo off\r\n" +
+                    ":wait\r\n" +
+                    $"tasklist /fi \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul\r\n" +
+                    "if not errorlevel 1 ( ping -n 2 127.0.0.1 >nul & goto wait )\r\n" +
+                    $"copy /y \"{newExe}\" \"{curExe}\" >nul\r\n" +
+                    $"start \"\" \"{curExe}\"{relArg}\r\n" +
+                    $"del \"{newExe}\" >nul 2>&1\r\n" +
+                    "del \"%~f0\" >nul 2>&1\r\n");
+
+                Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{bat}\"")
+                {
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    UseShellExecute = true
+                });
+
+                Application.Current.Shutdown();
+            }
+            catch
+            {
+                AboutUpdateButton.IsEnabled = true;
+                AboutUpdateText.Text = $"Update available: {tag}";
+            }
         }
 
         private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
@@ -8747,6 +10944,7 @@ namespace KillerPDF
         {
             if (_viewMode == mode) return;
             _viewMode = mode;
+            _gridScrollToPage = -1;
             App.SetSetting("ViewMode", mode.ToString());
 
             bool isContinuous = mode == ViewMode.Continuous;
@@ -8773,6 +10971,10 @@ namespace KillerPDF
                 _secondaryRenderCts?.Cancel();
                 ClearSecondaryPages();
                 _pageContentPanel.Width = double.NaN;
+                // Drop any scroll offset carried over from the previous mode (especially Continuous,
+                // whose large vertical offset would otherwise land the grid mid-document).
+                PagePreviewPanel.ScrollToVerticalOffset(0);
+                PagePreviewPanel.ScrollToHorizontalOffset(0);
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
                 {
                     RenderPage(mode == ViewMode.Grid ? 0 : idx);
@@ -8783,6 +10985,22 @@ namespace KillerPDF
                     if (mode == ViewMode.Grid)
                     {
                         SetZoom(GridZoomForN(Math.Min(_doc!.PageCount, 3)));
+                        // The first fit can run before the viewport width has settled (leaving the
+                        // grid off-center / at the wrong zoom); re-fit once more after layout settles,
+                        // and pin to the top so nothing carries over from the previous mode.
+                        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                            (Action)(() =>
+                            {
+                                ReapplyGridOrFit();
+                                // Selection is preserved across the switch; scroll to that page once
+                                // its tile streams in (grid tiles render async). Page 0 stays at top.
+                                if (idx > 0) _gridScrollToPage = idx;
+                                else
+                                {
+                                    PagePreviewPanel.ScrollToVerticalOffset(0);
+                                    PagePreviewPanel.ScrollToHorizontalOffset(0);
+                                }
+                            }));
                         return;
                     }
                     // Switching into Single or Two-Page fits the whole page so it isn't left at an
@@ -8878,6 +11096,19 @@ namespace KillerPDF
                 overlay.PreviewMouseLeftButtonDown += Canvas_MouseLeftButtonDown;
                 overlay.MouseMove                  += Canvas_MouseMove;
                 overlay.PreviewMouseLeftButtonUp   += Canvas_MouseLeftButtonUp;
+                // Right-click opens the same context menu as the primary page (overlays don't
+                // inherit _annotationCanvas's ContextMenu), targeting the right-clicked page.
+                int rcPage = i;
+                overlay.PreviewMouseRightButtonUp += (s, ev) =>
+                {
+                    if (_viewMode != ViewMode.TwoPage) PageList.SelectedIndex = rcPage;
+                    if (_annotationCanvas.ContextMenu is ContextMenu cm)
+                    {
+                        cm.PlacementTarget = (UIElement)s;
+                        cm.IsOpen = true;
+                        ev.Handled = true;
+                    }
+                };
                 _continuousCanvases[i] = overlay;
 
                 var pageImg = new Image { Stretch = Stretch.None, Width = _continuousPageW, Height = slotH };
@@ -8902,6 +11133,13 @@ namespace KillerPDF
                 _continuousPanel.Children.Add(placeholder);
                 y += slotH + 12;
             }
+
+            // Paint existing annotations onto the freshly built per-page overlays so they show
+            // immediately. Without this they stayed invisible until the next tool/page change
+            // happened to trigger a render for that page.
+            foreach (var annotPage in _annotations.Keys.ToList())
+                if (_continuousCanvases.ContainsKey(annotPage))
+                    RenderAllAnnotations(annotPage);
 
             // Re-apply fit mode now that _continuousPageW is known; default to fit-page (one whole
             // page in view) unless the user explicitly chose fit-width.
@@ -9053,13 +11291,23 @@ namespace KillerPDF
                 Owner = owner,
                 ResizeMode = ResizeMode.NoResize
             };
+            // AllowsTransparency windows can't use ClearType. Display mode pixel-snaps the (unscaled)
+            // dialog text so it stays crisp, and Grayscale gives smooth anti-aliased edges - the best
+            // combination available on a layered window.
+            TextOptions.SetTextFormattingMode(win, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(win, TextRenderingMode.Grayscale);
 
             var outerBorder = new Border
             {
                 Background      = R("BgModal"),
-                BorderBrush     = R("Accent"),
+                BorderBrush     = R("AccentBorder"),   // match the app window / Settings card border, not the bright accent
                 BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(6)
+                CornerRadius    = new CornerRadius(6),
+                Margin          = new Thickness(10),    // transparent halo so the drop shadow can render
+                Effect          = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = Colors.Black, BlurRadius = 18, ShadowDepth = 3, Direction = 270, Opacity = 0.6
+                }
             };
 
             var root = new StackPanel();
@@ -9067,19 +11315,34 @@ namespace KillerPDF
             // Title bar
             var titleBar = new Border
             {
-                Background   = R("BgPanel"),
+                // Transparent so the dialog-wide film grain shows through the title bar too (it sits
+                // over the same BgModal surface, so it still reads as one continuous surface).
+                Background   = Brushes.Transparent,
                 Padding      = new Thickness(16, 10, 16, 10),
                 CornerRadius = new CornerRadius(5, 5, 0, 0)
             };
             titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
-            titleBar.Child = new TextBlock
+            // When the title is just "KillerPDF", render it as the main window's wordmark - "Killer"
+            // in the primary text colour and "PDF" in the green logo accent, bold, with a soft shadow.
+            if (title == "KillerPDF")
             {
-                Text       = title,
-                Foreground = R("Accent"),
-                FontWeight = FontWeights.SemiBold,
-                FontSize   = 13,
-                FontFamily = new System.Windows.Media.FontFamily("Consolas")
-            };
+                var wm = new StackPanel { Orientation = Orientation.Horizontal };
+                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary") });
+                wm.Children.Add(new TextBlock { Text = "PDF",    FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo") });
+                wm.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 };
+                titleBar.Child = wm;
+            }
+            else
+            {
+                titleBar.Child = new TextBlock
+                {
+                    Text       = title,
+                    Foreground = R("Accent"),
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize   = 13,
+                    FontFamily = new System.Windows.Media.FontFamily("Consolas")
+                };
+            }
             root.Children.Add(titleBar);
 
             // Message
@@ -9177,7 +11440,29 @@ namespace KillerPDF
                 Child   = btnPanel
             });
 
-            outerBorder.Child = root;
+            // Paint the same film-grain texture the app's panels use, behind the content, so the
+            // dialog reads as part of the same surface family instead of a flat box.
+            var contentGrid = new Grid();
+            var grain = (owner as MainWindow)?.GrainTexture;
+            if (grain is not null)
+            {
+                double grainOpacity = Application.Current.Resources["GrainOpacity"] is double go ? go : 0.05;
+                contentGrid.Children.Add(new Border
+                {
+                    CornerRadius     = new CornerRadius(6),
+                    IsHitTestVisible = false,
+                    Opacity          = grainOpacity,
+                    Background = new System.Windows.Media.ImageBrush(grain)
+                    {
+                        TileMode      = System.Windows.Media.TileMode.Tile,
+                        ViewportUnits = System.Windows.Media.BrushMappingMode.Absolute,
+                        Viewport      = new Rect(0, 0, 256, 256),
+                        Stretch       = System.Windows.Media.Stretch.None
+                    }
+                });
+            }
+            contentGrid.Children.Add(root);
+            outerBorder.Child = contentGrid;
 
             win.Content = outerBorder;
             win.ShowDialog();

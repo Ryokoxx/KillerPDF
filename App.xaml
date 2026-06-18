@@ -10,6 +10,34 @@
                 <!-- [1] Strings (overridden at startup by LocaleManager.Initialize) -->
                 <ResourceDictionary Source="Strings/en-US.xaml"/>
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Global themed tooltip (replaces the plain white system box) -->
+            <Style TargetType="ToolTip">
+                <Setter Property="Background" Value="{DynamicResource BgModal}"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBorder}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="8,4"/>
+                <Setter Property="FontFamily" Value="Segoe UI, Microsoft JhengHei UI, Nirmala UI"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="HasDropShadow" Value="False"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToolTip">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="4"
+                                    Padding="{TemplateBinding Padding}">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="Black" BlurRadius="8" ShadowDepth="2" Direction="270" Opacity="0.45"/>
+                                </Border.Effect>
+                                <ContentPresenter/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

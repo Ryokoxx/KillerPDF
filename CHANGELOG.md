@@ -4,6 +4,40 @@ All notable changes to KillerPDF are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-06-16
+
+### Added
+- Strikethrough and underline annotation tools. Drag across text to mark it; each has its own color and opacity (shared bar with the highlighter) and flattens into the saved PDF.
+- Text annotation opacity: placed text can be made semi-transparent, and the text tool bar now matches the draw bar (color swatches, a size slider, and an opacity slider).
+- Shift+click multi-selection in the Select tool. Hold Shift and click annotations to build up a selection of several at once (the first Shift+click folds in any current single selection), then press Delete to remove them all; Shift+click an already-selected annotation to drop it.
+- Movable Signatures popup and Settings panel. Drag either by its title bar to anywhere inside the window; it stays within the window bounds and its position is remembered between sessions.
+- Keyboard shortcuts: editing-tool keys (V Select, T Text, H Highlight, K Strikethrough, U Underline, D Draw, C Crop, I Image, G Signature), F1 to toggle the shortcuts list, F2 to toggle About, Ctrl+V to paste a clipboard image or text onto the page, and Esc to close the About/Settings panels. The Keyboard Shortcuts overlay now lists every shortcut (including ones that were already wired, like Ctrl+S/Ctrl+W/Ctrl+N/Ctrl+0) with a dedicated TOOLS section.
+- Printing: scale (Fit to page, Actual size, or a custom percentage), page position, margins (None / Narrow / Normal / Wide), pages per sheet (1/2/4/6/9, composed by KillerPDF and shown in the preview), a Color / Black-and-white selector (sets the job's output color so colour-restricted print policies see it correctly), and two-sided printing when the printer supports it.
+- Page-number stamping. Right-click a page or sidebar thumbnail and choose "Stamp Page Numbers" to number every page, with a start value, format string ({n}, {N}), position, and font size. Stamps flatten into the saved PDF and the whole batch is a single undo.
+- Per-field form font size. While filling a text field, a "Font size - N +" stepper appears so you can resize that field's text; the choice is remembered per field and baked into the saved PDF.
+- One-click update from the About dialog: when a newer release exists, KillerPDF can download, verify, and reinstall it automatically.
+- Toolbar style picker (Settings -> Toolbar): Small icons, Large icons, Text beside icons, Text under icons, or Text only. Text modes are translated and degrade gracefully as the window narrows. Defaults to Small icons.
+- Recent files: a dropdown arrow next to the Open button lists the last 10 PDFs (with a Clear option), and they're also shown on the start screen; a dropdown next to Save offers Save and Save As.
+- Bengali (bn) and Turkish (tr-TR) translations (contributors akib-h #79, mrantikadev #76).
+
+### Changed
+- Visual refresh across the app: rounded window corners (squared when maximized or snapped); film grain on app surfaces including dialogs and the floating annotation bars; drop shadows on icons, buttons, menus, and panels; a green "PDF" wordmark; accent-colored radio buttons; per-theme scrollbars; themed size/opacity sliders (no more white control, and the WPF default blue no longer flashes while dragging); quick fade in/out for the Settings, Shortcuts, About, and signature panels; a clearer sidebar drag handle; a bolder Install button; a new chisel-tip highlighter icon and mouse-cursor Select icon; a title-bar filename that truncates instead of overlapping the window buttons; and crisper anti-aliasing for text, menus, and dialogs (which now share one unified background, border, and "KillerPDF" wordmark). Print preview sits on a soft drop shadow with a grained page-counter strip.
+- Theme polish: Blood/Greed/Cyanotic use darker chrome with a lighter document pane and lighter accent borders so the document frame and the Settings/signature/dialog outlines read clearly; Dark chrome is a touch darker to offset the grain; the signature and Create Signature windows are fully themed and reload live on theme change.
+- Settings panel reorganized into compact flyout submenus (Language, Theme, Toolbar, View Mode) that stay open after a pick so you can try options back to back.
+- Editing tool order is now Select, Text, Underline, Strikethrough, Highlight, Draw, Add Image, Signature, Crop across the toolbar, the overflow menu, and the shortcuts overlay.
+- Grid and Two-Page pages render sharper on high-DPI displays.
+
+### Fixed
+- Interactive form fields appear and fill in every view mode (previously Single Page only), line up precisely on pages with an inset CropBox or offset origin (common in government/scanned forms), and size their text from the field's own /DA instead of guessing from the box height.
+- Undo reliability: undo removes one item per press, in order, and a held Ctrl+Z no longer fires several undos at once.
+- "Clear All Annotations" clears the whole document in every view mode as a single undo; the right-click "Clear Page Annotations" updates the correct page and can be undone.
+- Grid view: the wheel keeps scrolling reliably (it could stick after a zoom or column change), clicking a sidebar page or entering a page number scrolls and fits correctly (Issue #78), and annotations commit to the page they were drawn on rather than a neighbor that was still streaming in.
+- Repairing a damaged PDF no longer freezes the window; the repair runs on a background thread behind a busy spinner instead of locking the UI with an hourglass.
+- Printing and Save Flattened no longer crash with an "Unexpected token 'xref'" / "Invalid entry in XRef table" error on documents PdfSharpCore can't reopen; they use the same repair fallback as Save.
+- A manually-closed PDF no longer reopens on the next launch (Issue #75).
+- The vertical scrollbar is grabbable again - the window-resize border used to capture it at the window's edge.
+- Search waits for a brief pause in typing before running, so the first keystrokes on a large document no longer lock the UI. The Outlines panel scrolls with the mouse wheel, and its tree no longer auto-expands every branch (handy for long, deeply-nested documents).
+
 ## [1.5.1] - 2026-06-14
 
 ### Fixed

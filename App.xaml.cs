@@ -562,6 +562,41 @@ namespace KillerPDF
             catch { /* best-effort */ }
         }
 
+        internal static void RemoveSetting(string name)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"Software\KillerPDF\Settings", writable: true);
+                key?.DeleteValue(name, throwOnMissingValue: false);
+            }
+            catch { /* best-effort */ }
+        }
+
+        // ── Recent files (most-recent first, capped) ─────────────────────
+        private const int RecentFilesMax = 10;
+
+        internal static System.Collections.Generic.List<string> GetRecentFiles()
+        {
+            var list = new System.Collections.Generic.List<string>();
+            var raw = GetSetting("RecentFiles");
+            if (string.IsNullOrEmpty(raw)) return list;
+            foreach (var p in raw.Split('|'))
+                if (!string.IsNullOrWhiteSpace(p)) list.Add(p);
+            return list;
+        }
+
+        internal static void AddRecentFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            var list = GetRecentFiles();
+            list.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            list.Insert(0, path);
+            while (list.Count > RecentFilesMax) list.RemoveAt(list.Count - 1);
+            SetSetting("RecentFiles", string.Join("|", list));   // '|' is illegal in Windows paths
+        }
+
+        internal static void ClearRecentFiles() => RemoveSetting("RecentFiles");
+
         private static bool IsInstalled()
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\KillerPDF");

@@ -22,15 +22,34 @@ namespace KillerPDF
     /// </summary>
     internal sealed class PrintPreviewWindow : Window
     {
-        private readonly BitmapSource[] _pages;
+        private readonly BitmapSource?[] _pages;   // filled lazily as pages render in the background
         private readonly int[] _rasterW;
         private readonly int[] _rasterH;
+        private readonly double[] _pageDipW;   // true physical page size in DIPs (for exact scaling)
+        private readonly double[] _pageDipH;
+
+        private int _loadedCount;              // pages rendered so far
+        private bool _isLoading = true;        // true until every page has rendered
+        private Button _printBtn = null!;      // disabled while pages are still loading
+        public volatile bool Cancelled;        // set on close so the background render stops
 
         private readonly List<PrintQueue> _queues = [];
         private PrintQueue? _queue;
         private LocalPrintServer? _server;   // kept alive: queues reference their server
         private bool _landscape;
         private int _previewIndex;
+        // Page position on the sheet: 0 = left/top, 1 = center, 2 = right/bottom.
+        private int _alignH = 1;
+        private int _alignV = 1;
+        // Scale mode: 0 = fit to page, 1 = actual size (100%), 2 = custom percentage.
+        private int _scaleMode = 0;
+        private double _customPct = 100;
+        private TextBox _scaleBox = null!;
+        private double _marginPx;            // extra inset inside the printable area (DIPs)
+        private int _nUp = 1;                // pages per sheet (1, 2, 4, 6, 9)
+        private bool _duplex;                // two-sided printing (when the printer supports it)
+        private CheckBox _duplexCheck = null!;
+        private bool _grayscale;             // send the job as grayscale/B&W rather than colour
 
         // Printable area in DIPs for the currently selected printer + orientation.
         private double _areaW = 816;   // Letter portrait fallback (8.5in * 96)
@@ -41,6 +60,7 @@ namespace KillerPDF
         private ComboBox _printerCombo = null!;
         private TextBox _copiesBox = null!;
         private TextBox _pagesBox = null!;
+        private Grid _rootGrid = null!;   // clipped to rounded corners on resize
 
         // Segoe MDL2 Assets close glyph, matching the main window chrome close button.
         private const string CloseGlyph = "";
@@ -48,11 +68,15 @@ namespace KillerPDF
         /// <summary>Number of pages sent to the printer (set when the user prints).</summary>
         public int PrintedPageCount { get; private set; }
 
-        public PrintPreviewWindow(Window? owner, BitmapSource[] pages, int[] rasterW, int[] rasterH)
+        public PrintPreviewWindow(Window? owner, int pageCount, double[] pageDipW, double[] pageDipH)
         {
-            _pages   = pages;
-            _rasterW = rasterW;
-            _rasterH = rasterH;
+            // Pages render lazily on a background thread (fed in via SetRenderedPage), so the
+            // window opens instantly and shows a spinner instead of blocking on large files.
+            _pages   = new BitmapSource?[pageCount];
+            _rasterW = new int[pageCount];
+            _rasterH = new int[pageCount];
+            _pageDipW = pageDipW;
+            _pageDipH = pageDipH;
 
             Title  = "KillerPDF - Print";
             Width  = 920;
@@ -68,31 +92,137 @@ namespace KillerPDF
                 ? WindowStartupLocation.CenterOwner
                 : WindowStartupLocation.CenterScreen;
 
+            // Match the main window's crisp text rendering. The main window sets these in XAML;
+            // this window is built in code, so without them the text falls back to rougher
+            // defaults (the "not anti-aliased" look).
+            FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
+            UseLayoutRounding = true;
+
             // Borderless windows (WindowStyle.None) have no native resize border, so
             // WindowChrome restores edge resizing without showing the grip handle.
+            // The visible card is inset by a small transparent margin for the drop shadow. The
+            // resize border is a touch larger than that margin so the resize zone reaches the
+            // card's visible edge rather than floating in the empty halo around it.
             System.Windows.Shell.WindowChrome.SetWindowChrome(this, new System.Windows.Shell.WindowChrome
             {
-                ResizeBorderThickness = new Thickness(8),
+                ResizeBorderThickness = new Thickness(12),
                 CaptionHeight         = 0,
                 GlassFrameThickness   = new Thickness(0),
                 CornerRadius          = new CornerRadius(0),
                 UseAeroCaptionButtons = false
             });
 
+            // Reuse the main window's themed scrollbar (per-theme thumb) for this dialog's scrollers.
+            if (owner?.TryFindResource(typeof(System.Windows.Controls.Primitives.ScrollBar)) is Style sbStyle)
+                Resources[typeof(System.Windows.Controls.Primitives.ScrollBar)] = sbStyle;
             BuildUi();
+            SizeChanged += (_, _) => ClipRoot();
             LoadPrinters();
+            UpdateDuplexAvailability();
             RefreshArea();
             UpdatePreview();
         }
 
         protected override void OnClosed(EventArgs e)
         {
+            Cancelled = true;   // stop any in-flight background page rendering
             base.OnClosed(e);
             try { _server?.Dispose(); } catch { }
         }
 
+        // Clips the content to the card's rounded corners (the rounded border alone doesn't clip
+        // its children, so square corners would poke through).
+        private void ClipRoot()
+        {
+            if (_rootGrid == null) return;
+            _rootGrid.Clip = new RectangleGeometry(
+                new Rect(0, 0, _rootGrid.ActualWidth, _rootGrid.ActualHeight), 6, 6);
+        }
+
         private static SolidColorBrush R(string key)
             => (SolidColorBrush)Application.Current.Resources[key];
+
+        private static string S(string key)
+            => Application.Current.TryFindResource(key) as string ?? key;
+
+        // Themes a TextBox so the OS default blue focus border / selection chrome doesn't show.
+        private static void StyleTextBox(TextBox tb)
+        {
+            tb.BorderThickness     = new Thickness(1);
+            tb.CaretBrush          = R("TextPrimary");
+            tb.SelectionBrush      = R("AccentDim");
+            tb.SelectionTextBrush  = R("TextPrimary");
+            tb.Template            = MakeTextBoxTemplate();
+        }
+
+        // Themed checkbox: a rounded box (canvas bg + dim border) with an accent check glyph that
+        // appears when checked, matching the rest of the dialog instead of the white system control.
+        private static void StyleCheckBox(CheckBox cb)
+        {
+            cb.Foreground = R("TextPrimary");
+
+            var row = new FrameworkElementFactory(typeof(StackPanel));
+            row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+
+            var box = new FrameworkElementFactory(typeof(Border));
+            box.SetValue(Border.WidthProperty, 16.0);
+            box.SetValue(Border.HeightProperty, 16.0);
+            box.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+            box.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            box.SetValue(Border.BorderBrushProperty, R("BorderDim"));   // subtle outline; the check is the accent
+            box.SetValue(Border.BackgroundProperty, R("BgCanvas"));
+            box.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+            box.SetValue(Border.MarginProperty, new Thickness(0, 0, 8, 0));
+
+            var check = new FrameworkElementFactory(typeof(TextBlock));
+            check.Name = "check";
+            check.SetValue(TextBlock.TextProperty, "");   // Segoe MDL2 checkmark
+            check.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
+            check.SetValue(TextBlock.FontSizeProperty, 14.0);
+            check.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
+            check.SetValue(TextBlock.ForegroundProperty, R("RadioAccent"));   // match the radio buttons
+            check.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            check.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            check.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            box.AppendChild(check);
+
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+            row.AppendChild(box);
+            row.AppendChild(content);
+
+            var ct = new ControlTemplate(typeof(CheckBox)) { VisualTree = row };
+            var onChecked = new Trigger
+            {
+                Property = System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,
+                Value = true
+            };
+            onChecked.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible) { TargetName = "check" });
+            ct.Triggers.Add(onChecked);
+            cb.Template = ct;
+        }
+
+        private static ControlTemplate MakeTextBoxTemplate()
+        {
+            var b = new FrameworkElementFactory(typeof(Border));
+            b.SetBinding(Border.BackgroundProperty, new Binding("Background") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            b.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            b.SetBinding(Border.BorderThicknessProperty, new Binding("BorderThickness") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            b.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+            var sv = new FrameworkElementFactory(typeof(ScrollViewer));
+            sv.Name = "PART_ContentHost";
+            b.AppendChild(sv);
+            var ct = new ControlTemplate(typeof(TextBox)) { VisualTree = b };
+            // Dim the box when disabled (e.g. the custom-scale % field unless Scale = Custom) so it
+            // reads as inactive instead of looking like an editable field.
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4));
+            ct.Triggers.Add(disabled);
+            return ct;
+        }
 
         // Pulls a named Style from the owning MainWindow so this dialog reuses the
         // app's themed ComboBox / chrome-close-button styling verbatim.
@@ -113,6 +243,122 @@ namespace KillerPDF
             combo.Background = R("BgCanvas");
         }
 
+        // Builds a film-grain overlay matching the main window's texture and per-theme
+        // opacity, or null if the owner hasn't generated a grain tile yet.
+        private Border? MakeGrainLayer()
+        {
+            if ((Owner as MainWindow)?.GrainTexture is not ImageSource grain) return null;
+            double op = Application.Current.TryFindResource("GrainOpacity") is double g ? g : 0.30;
+            return new Border
+            {
+                IsHitTestVisible = false,
+                Opacity          = op,
+                Background = new ImageBrush(grain)
+                {
+                    TileMode      = TileMode.Tile,
+                    ViewportUnits = BrushMappingMode.Absolute,
+                    Viewport      = new Rect(0, 0, 256, 256),
+                    Stretch       = Stretch.None
+                }
+            };
+        }
+
+        // Raster-pixels -> DIP scale factor for a page under the current scale mode.
+        // Fit shrinks the page to the printable area; actual/custom use the true physical size.
+        private double ScaleFor(int idx, double areaW, double areaH)
+        {
+            double actual = _pageDipW[idx] / Math.Max(1, _rasterW[idx]);
+            return _scaleMode switch
+            {
+                1 => actual,
+                2 => actual * (_customPct / 100.0),
+                _ => Math.Min(areaW / _rasterW[idx], areaH / _rasterH[idx])
+            };
+        }
+
+        // Page offset within the printable area for the current alignment selection.
+        private double OffsetH(double areaW, double imgW)
+            => _alignH == 0 ? 0 : _alignH == 2 ? areaW - imgW : (areaW - imgW) / 2;
+        private double OffsetV(double areaH, double imgH)
+            => _alignV == 0 ? 0 : _alignV == 2 ? areaH - imgH : (areaH - imgH) / 2;
+
+        // Column/row grid for the current pages-per-sheet count, oriented to the sheet.
+        private (int cols, int rows) NupGrid() => _nUp switch
+        {
+            2 => _landscape ? (2, 1) : (1, 2),
+            4 => (2, 2),
+            6 => _landscape ? (3, 2) : (2, 3),
+            9 => (3, 3),
+            _ => (1, 1)
+        };
+
+        private int SheetCount() => _pages.Length == 0 ? 0 : (_pages.Length + _nUp - 1) / _nUp;
+
+        // Builds one sheet (aw x ah DIPs, white) holding the given source pages. 1-up honours the
+        // scale mode + alignment + margin; N-up fits each page into its grid cell. Shared by the
+        // preview and the print path so what you see is what prints.
+        private Grid ComposeSheet(System.Collections.Generic.List<int> idxs, double aw, double ah)
+        {
+            var sheet = new Grid { Width = aw, Height = ah, Background = Brushes.White, ClipToBounds = true };
+            var canvas = new Canvas();
+            double m = _marginPx;
+
+            if (_nUp <= 1)
+            {
+                if (idxs.Count > 0)
+                {
+                    int idx = idxs[0];
+                    double s = ScaleFor(idx, aw - 2 * m, ah - 2 * m);
+                    double iw = _rasterW[idx] * s, ih = _rasterH[idx] * s;
+                    var img = new Image { Source = _pages[idx]!, Width = iw, Height = ih };
+                    RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                    Canvas.SetLeft(img, m + OffsetH(aw - 2 * m, iw));
+                    Canvas.SetTop(img, m + OffsetV(ah - 2 * m, ih));
+                    canvas.Children.Add(img);
+                }
+            }
+            else
+            {
+                var (cols, rows) = NupGrid();
+                const double gap = 6;
+                double cellW = (aw - 2 * m) / cols, cellH = (ah - 2 * m) / rows;
+                for (int i = 0; i < idxs.Count && i < cols * rows; i++)
+                {
+                    int idx = idxs[i];
+                    int row = i / cols, col = i % cols;
+                    double availW = Math.Max(1, cellW - gap), availH = Math.Max(1, cellH - gap);
+                    double s = Math.Min(availW / _rasterW[idx], availH / _rasterH[idx]);
+                    double iw = _rasterW[idx] * s, ih = _rasterH[idx] * s;
+                    var img = new Image { Source = _pages[idx]!, Width = iw, Height = ih };
+                    RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                    Canvas.SetLeft(img, m + col * cellW + (cellW - iw) / 2);
+                    Canvas.SetTop(img, m + row * cellH + (cellH - ih) / 2);
+                    canvas.Children.Add(img);
+                }
+            }
+
+            sheet.Children.Add(canvas);
+            return sheet;
+        }
+
+        // Enables the two-sided checkbox only when the selected printer reports duplex support.
+        private void UpdateDuplexAvailability()
+        {
+            bool ok = false;
+            try
+            {
+                var caps = _queue?.GetPrintCapabilities();
+                ok = caps?.DuplexingCapability?.Contains(Duplexing.TwoSidedLongEdge) == true;
+            }
+            catch { /* capability query not supported: leave disabled */ }
+
+            if (_duplexCheck is null) return;
+            _duplexCheck.IsEnabled = ok;
+            if (!ok) { _duplexCheck.IsChecked = false; _duplex = false; }
+            _duplexCheck.Opacity = ok ? 1.0 : 0.4;
+            _duplexCheck.ToolTip = ok ? null : "The selected printer doesn't report two-sided support.";
+        }
+
         // ---- UI construction -------------------------------------------------
 
         private void BuildUi()
@@ -122,25 +368,32 @@ namespace KillerPDF
                 Background      = R("BgSidebar"),
                 BorderBrush     = R("BorderDim"),
                 BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(0),
-                Margin          = new Thickness(14),   // room for the drop shadow
+                CornerRadius    = new CornerRadius(7),
+                Margin          = new Thickness(12),    // halo so the (stronger) drop shadow can render
                 Effect          = new System.Windows.Media.Effects.DropShadowEffect
                 {
                     Color       = Colors.Black,
-                    BlurRadius  = 14,
-                    ShadowDepth = 2,
+                    BlurRadius  = 18,
+                    ShadowDepth = 3,
                     Direction   = 270,
-                    Opacity     = 0.5
+                    Opacity     = 0.6
                 }
             };
             var root = new DockPanel();
-            outer.Child = root;
+            // Film grain behind the whole dialog so the settings column and title bar carry
+            // the same texture as the rest of the app. The preview column paints its own grain
+            // over its lighter canvas.
+            _rootGrid = new Grid();
+            var bgGrain = MakeGrainLayer();
+            if (bgGrain != null) _rootGrid.Children.Add(bgGrain);
+            _rootGrid.Children.Add(root);
+            outer.Child = _rootGrid;
             Content = outer;
 
-            // Title bar
+            // Title bar (transparent so the dialog-wide grain shows through behind the title)
             var titleBar = new Border
             {
-                Background   = R("BgSidebar"),
+                Background   = Brushes.Transparent,
                 CornerRadius = new CornerRadius(0)
             };
             DockPanel.SetDock(titleBar, Dock.Top);
@@ -149,16 +402,40 @@ namespace KillerPDF
             var titleGrid = new Grid();
             titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var titleText = new TextBlock
+            // Render the "KillerPDF" part of the title as the app wordmark (Killer + green PDF),
+            // matching the main window and dialog title bars; the rest (e.g. " - Print") stays muted.
+            FrameworkElement titleText;
+            string printTitle = S("Str_Print_Title");
+            int kpIdx = printTitle.IndexOf("KillerPDF", StringComparison.Ordinal);
+            if (kpIdx >= 0)
             {
-                Text       = "KillerPDF - Print",
-                Foreground = R("Accent"),
-                FontWeight = FontWeights.SemiBold,
-                FontSize   = 13,
-                FontFamily = new FontFamily("Consolas"),
-                Margin     = new Thickness(16, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
+                var wm = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(16, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 }
+                };
+                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary"), VerticalAlignment = VerticalAlignment.Center });
+                wm.Children.Add(new TextBlock { Text = "PDF",    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo"), VerticalAlignment = VerticalAlignment.Center });
+                string after = printTitle.Substring(kpIdx + "KillerPDF".Length);
+                if (!string.IsNullOrEmpty(after))
+                    wm.Children.Add(new TextBlock { Text = after, FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontSize = 13, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
+                titleText = wm;
+            }
+            else
+            {
+                titleText = new TextBlock
+                {
+                    Text       = printTitle,
+                    Foreground = R("Accent"),
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize   = 13,
+                    FontFamily = new FontFamily("Consolas"),
+                    Margin     = new Thickness(16, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
             Grid.SetColumn(titleText, 0);
 
             // Match the main window's chrome close button: Segoe MDL2 close glyph,
@@ -195,25 +472,25 @@ namespace KillerPDF
 
         private UIElement BuildSettingsColumn()
         {
-            var panel = new StackPanel { Margin = new Thickness(16, 14, 12, 14) };
-            Grid.SetColumn(panel, 0);
+            // Options live in a scroller (buttons are pinned below), so only a little top/side inset.
+            var panel = new StackPanel { Margin = new Thickness(16, 8, 12, 4) };
 
-            panel.Children.Add(Label("Printer"));
+            panel.Children.Add(Label(S("Str_Print_Printer")));
             var printerCombo = new ComboBox { Margin = new Thickness(0, 4, 0, 12), Height = 26 };
             ApplyComboStyle(printerCombo);
             printerCombo.SelectionChanged += (s, _) =>
             {
                 int i = ((ComboBox)s).SelectedIndex;
-                if (i >= 0 && i < _queues.Count) { _queue = _queues[i]; RefreshArea(); UpdatePreview(); }
+                if (i >= 0 && i < _queues.Count) { _queue = _queues[i]; RefreshArea(); UpdateDuplexAvailability(); UpdatePreview(); }
             };
             _printerCombo = printerCombo;
             panel.Children.Add(printerCombo);
 
-            panel.Children.Add(Label("Orientation"));
+            panel.Children.Add(Label(S("Str_Print_Orientation")));
             var orient = new ComboBox { Margin = new Thickness(0, 4, 0, 12), Height = 26 };
             ApplyComboStyle(orient);
-            orient.Items.Add("Portrait");
-            orient.Items.Add("Landscape");
+            orient.Items.Add(S("Str_Print_Portrait"));
+            orient.Items.Add(S("Str_Print_Landscape"));
             orient.SelectedIndex = 0;
             orient.SelectionChanged += (s, _) =>
             {
@@ -223,7 +500,149 @@ namespace KillerPDF
             };
             panel.Children.Add(orient);
 
-            panel.Children.Add(Label("Copies"));
+            // Colour vs black & white. Sent on the print ticket so colour-restricted print policies
+            // (e.g. "B&W needs no password") see the job correctly instead of treating it as colour.
+            panel.Children.Add(Label(S("Str_Print_Color")));
+            var colorMode = new ComboBox { Margin = new Thickness(0, 4, 0, 12), Height = 26 };
+            ApplyComboStyle(colorMode);
+            colorMode.Items.Add(S("Str_Print_Color"));
+            colorMode.Items.Add(S("Str_Print_BW"));
+            colorMode.SelectedIndex = 0;
+            colorMode.SelectionChanged += (s, _) => _grayscale = ((ComboBox)s).SelectedIndex == 1;
+            panel.Children.Add(colorMode);
+
+            panel.Children.Add(Label(S("Str_Stamp_Position")));
+            var position = new ComboBox { Margin = new Thickness(0, 4, 0, 12), Height = 26 };
+            ApplyComboStyle(position);
+            // (resource key, horizontal 0/1/2, vertical 0/1/2)
+            var positions = new (string key, int h, int v)[]
+            {
+                ("Str_Pos_Center", 1, 1), ("Str_Pos_Top", 1, 0), ("Str_Pos_Bottom", 1, 2),
+                ("Str_Pos_Left", 0, 1), ("Str_Pos_Right", 2, 1),
+                ("Str_Pos_TopLeft", 0, 0), ("Str_Pos_TopRight", 2, 0),
+                ("Str_Pos_BottomLeft", 0, 2), ("Str_Pos_BottomRight", 2, 2)
+            };
+            foreach (var p in positions) position.Items.Add(S(p.key));
+            position.SelectedIndex = 0;
+            position.SelectionChanged += (s, _) =>
+            {
+                int i = ((ComboBox)s).SelectedIndex;
+                if (i >= 0 && i < positions.Length)
+                {
+                    _alignH = positions[i].h;
+                    _alignV = positions[i].v;
+                    UpdatePreview();
+                }
+            };
+            panel.Children.Add(position);
+
+            // Margins: an extra inset applied inside the printable area.
+            panel.Children.Add(Label(S("Str_Print_Margins")));
+            var margins = new ComboBox { Margin = new Thickness(0, 4, 0, 12), Height = 26 };
+            ApplyComboStyle(margins);
+            var marginOpts = new (string name, double inches)[]
+            {
+                (S("Str_Margin_None"), 0),
+                ($"{S("Str_Margin_Narrow")} (0.25\")", 0.25),
+                ($"{S("Str_Margin_Normal")} (0.5\")", 0.5),
+                ($"{S("Str_Margin_Wide")} (1\")", 1.0)
+            };
+            foreach (var mo in marginOpts) margins.Items.Add(mo.name);
+            margins.SelectedIndex = 0;
+            margins.SelectionChanged += (s, _) =>
+            {
+                int i = ((ComboBox)s).SelectedIndex;
+                if (i >= 0 && i < marginOpts.Length) { _marginPx = marginOpts[i].inches * 96.0; UpdatePreview(); }
+            };
+            panel.Children.Add(margins);
+
+            // Pages per sheet (N-up): KillerPDF composes the sheet itself.
+            panel.Children.Add(Label(S("Str_Print_PagesPerSheet")));
+            var nup = new ComboBox { Margin = new Thickness(0, 4, 0, 12), Height = 26 };
+            ApplyComboStyle(nup);
+            foreach (var n in new[] { "1", "2", "4", "6", "9" }) nup.Items.Add(n);
+            nup.SelectedIndex = 0;
+            nup.SelectionChanged += (s, _) =>
+            {
+                _nUp = int.TryParse((string)((ComboBox)s).SelectedItem, out int n) && n > 0 ? n : 1;
+                _previewIndex = 0;
+                UpdatePreview();
+            };
+            panel.Children.Add(nup);
+
+            panel.Children.Add(Label(S("Str_Print_Scale")));
+            var scale = new ComboBox { Margin = new Thickness(0, 4, 0, 6), Height = 26 };
+            ApplyComboStyle(scale);
+            scale.Items.Add(S("Str_Print_Fit"));
+            scale.Items.Add(S("Str_Print_Actual"));
+            scale.Items.Add(S("Str_Print_Custom"));
+            scale.SelectedIndex = 0;
+            panel.Children.Add(scale);
+
+            // Custom percentage: a compact box (always 1-100ish) with a "%" suffix, revealed only
+            // when "Custom" is chosen - it slides down into place instead of always taking space.
+            _scaleBox = new TextBox
+            {
+                Text         = "100",
+                Width        = 56,
+                Background    = R("BgCanvas"),
+                Foreground    = R("TextPrimary"),
+                BorderBrush   = R("BorderDim"),
+                Padding       = new Thickness(6, 4, 6, 4),
+                ToolTip       = S("Str_Print_ScaleHint")
+            };
+            _scaleBox.TextChanged += (s, _) =>
+            {
+                var t = ((TextBox)s).Text?.Trim().TrimEnd('%', ' ');
+                if (double.TryParse(t, out double p) && p > 0)
+                {
+                    _customPct = p;
+                    if (_scaleMode == 2) UpdatePreview();
+                }
+            };
+            StyleTextBox(_scaleBox);
+
+            var scaleRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin      = new Thickness(0, 0, 0, 12),
+                Visibility  = Visibility.Collapsed
+            };
+            scaleRow.Children.Add(_scaleBox);
+            scaleRow.Children.Add(new TextBlock
+            {
+                Text = "%", Foreground = R("TextSecondary"),
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0)
+            });
+            var scaleSlide = new TranslateTransform();
+            scaleRow.RenderTransform = scaleSlide;
+
+            scale.SelectionChanged += (s, _) =>
+            {
+                _scaleMode = ((ComboBox)s).SelectedIndex;
+                if (_scaleMode == 1) { _customPct = 100; _scaleBox.Text = "100"; }
+                if (_scaleMode == 2)
+                {
+                    scaleRow.Visibility = Visibility.Visible;
+                    scaleRow.BeginAnimation(UIElement.OpacityProperty,
+                        new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                            new Duration(TimeSpan.FromMilliseconds(140))));
+                    scaleSlide.BeginAnimation(TranslateTransform.YProperty,
+                        new System.Windows.Media.Animation.DoubleAnimation(-8, 0,
+                            new Duration(TimeSpan.FromMilliseconds(140)))
+                        { EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut } });
+                    _scaleBox.Focus();
+                    _scaleBox.SelectAll();
+                }
+                else
+                {
+                    scaleRow.Visibility = Visibility.Collapsed;
+                }
+                UpdatePreview();
+            };
+            panel.Children.Add(scaleRow);
+
+            panel.Children.Add(Label(S("Str_Print_Copies")));
             _copiesBox = new TextBox
             {
                 Text        = "1",
@@ -233,9 +652,10 @@ namespace KillerPDF
                 BorderBrush  = R("BorderDim"),
                 Padding      = new Thickness(6, 4, 6, 4)
             };
+            StyleTextBox(_copiesBox);
             panel.Children.Add(_copiesBox);
 
-            panel.Children.Add(Label("Pages"));
+            panel.Children.Add(Label(S("Str_Print_Pages")));
             _pagesBox = new TextBox
             {
                 Text        = "",
@@ -245,36 +665,74 @@ namespace KillerPDF
                 BorderBrush  = R("BorderDim"),
                 Padding      = new Thickness(6, 4, 6, 4)
             };
+            StyleTextBox(_pagesBox);
             panel.Children.Add(_pagesBox);
             panel.Children.Add(new TextBlock
             {
-                Text         = "e.g. 1-3,5  (blank = all)",
+                Text         = S("Str_Print_PagesHint"),
                 Foreground   = R("TextSecondary"),
                 FontSize     = 11,
                 Margin       = new Thickness(0, 0, 0, 16),
                 TextWrapping = TextWrapping.Wrap
             });
 
+            // Two-sided: the printer does the flipping; we just set the ticket when it's supported.
+            _duplexCheck = new CheckBox
+            {
+                Content    = S("Str_Print_TwoSided"),
+                Foreground = R("TextPrimary"),
+                Margin     = new Thickness(0, 2, 0, 14),
+                Cursor     = Cursors.Hand,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            StyleCheckBox(_duplexCheck);
+            _duplexCheck.Checked   += (_, _) => _duplex = true;
+            _duplexCheck.Unchecked += (_, _) => _duplex = false;
+            panel.Children.Add(_duplexCheck);
+            UpdateDuplexAvailability();
+
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            var cancel = MakeButton("Cancel", false);
+            var cancel = MakeButton(S("Str_Stamp_Cancel"), false);
             cancel.Click += (_, _) => { DialogResult = false; Close(); };
-            var print = MakeButton("Print", true);
+            var print = MakeButton(S("Str_Ctx_Print"), true);
             print.Margin = new Thickness(8, 0, 0, 0);
             print.Click += (_, _) => DoPrint();
+            print.IsEnabled = !_isLoading;   // enabled once all pages have rendered
+            _printBtn = print;
             btnRow.Children.Add(cancel);
             btnRow.Children.Add(print);
-            panel.Children.Add(btnRow);
 
-            return panel;
+            // Scroll the options and PIN the buttons at the bottom, so they're never cut off when
+            // the window is short or the custom-scale field is showing. Scroll wheel works too.
+            var optionsScroller = new ScrollViewer
+            {
+                Content                       = panel,
+                VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            };
+            Grid.SetRow(optionsScroller, 0);
+
+            var btnHost = new Border { Child = btnRow, Padding = new Thickness(16, 8, 12, 12) };
+            Grid.SetRow(btnHost, 1);
+
+            var column = new Grid();
+            column.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            column.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            column.Children.Add(optionsScroller);
+            column.Children.Add(btnHost);
+            Grid.SetColumn(column, 0);
+            return column;
         }
 
         private UIElement BuildPreviewColumn()
         {
             var wrap = new Border
             {
-                Background = R("BgCanvas"),
-                Margin     = new Thickness(0, 4, 8, 12),
-                CornerRadius = new CornerRadius(4)
+                Background       = R("BgCanvas"),
+                BorderBrush      = R("PaneBorder"),   // 1px frame, matching the main document pane
+                BorderThickness  = new Thickness(1),
+                Margin           = new Thickness(0, 4, 8, 12),
+                CornerRadius     = new CornerRadius(4)
             };
             Grid.SetColumn(wrap, 1);
 
@@ -294,7 +752,7 @@ namespace KillerPDF
             var prev = MakeButton("◀", false);   // left triangle
             prev.Click += (_, _) => { if (_previewIndex > 0) { _previewIndex--; UpdatePreview(); } };
             var next = MakeButton("▶", false);   // right triangle
-            next.Click += (_, _) => { if (_previewIndex < _pages.Length - 1) { _previewIndex++; UpdatePreview(); } };
+            next.Click += (_, _) => { if (_previewIndex < SheetCount() - 1) { _previewIndex++; UpdatePreview(); } };
             _pageLabel.Foreground = R("TextPrimary");
             _pageLabel.VerticalAlignment = VerticalAlignment.Center;
             _pageLabel.Margin = new Thickness(12, 0, 12, 0);
@@ -305,24 +763,17 @@ namespace KillerPDF
             Grid.SetRow(nav, 1);
             grid.Children.Add(nav);
 
-            // Match the main document area's film grain (same tile + opacity).
-            if ((Owner as MainWindow)?.GrainTexture is ImageSource grain)
+            // Film grain over the preview canvas, behind the page so it textures the margins
+            // around the sheet rather than the document itself.
+            var previewGrain = MakeGrainLayer();
+            if (previewGrain != null)
             {
-                var grainOverlay = new Border
-                {
-                    IsHitTestVisible = false,
-                    Opacity          = 0.15,
-                    Background = new ImageBrush(grain)
-                    {
-                        TileMode      = TileMode.Tile,
-                        ViewportUnits = BrushMappingMode.Absolute,
-                        Viewport      = new Rect(0, 0, 256, 256),
-                        Stretch       = Stretch.None
-                    }
-                };
-                Grid.SetRow(grainOverlay, 0);
-                Panel.SetZIndex(grainOverlay, 999);
-                grid.Children.Add(grainOverlay);
+                Grid.SetRow(previewGrain, 0);
+                Grid.SetRowSpan(previewGrain, 2);   // also texture the page-counter row so it isn't a flat gray bar
+                Panel.SetZIndex(previewGrain, 0);
+                Panel.SetZIndex(_previewHost, 1);
+                Panel.SetZIndex(nav, 1);             // keep the counter and arrows above the grain
+                grid.Children.Add(previewGrain);
             }
 
             wrap.Child = grid;
@@ -396,28 +847,107 @@ namespace KillerPDF
         private void UpdatePreview()
         {
             _previewHost.Children.Clear();
-            if (_pages.Length == 0) { _pageLabel.Text = "No pages"; return; }
+            if (_pages.Length == 0) { _pageLabel.Text = S("Str_Print_NoPages"); return; }
 
-            int idx = Math.Max(0, Math.Min(_previewIndex, _pages.Length - 1));
-            _previewIndex = idx;
+            int sheets = SheetCount();
+            int sheet = Math.Max(0, Math.Min(_previewIndex, sheets - 1));
+            _previewIndex = sheet;
 
-            var paper = new Grid { Width = _areaW, Height = _areaH, Background = Brushes.White };
-            double scale = Math.Min(_areaW / _rasterW[idx], _areaH / _rasterH[idx]);
-            var img = new Image
+            // Source pages on this sheet (one for 1-up, up to _nUp for N-up).
+            var idxs = new System.Collections.Generic.List<int>();
+            for (int i = sheet * _nUp; i < Math.Min(_pages.Length, sheet * _nUp + _nUp); i++)
+                idxs.Add(i);
+
+            // If any page on this sheet hasn't rendered yet, show a spinner instead of composing.
+            if (idxs.Any(i => _pages[i] is null))
             {
-                Source              = _pages[idx],
-                Width               = _rasterW[idx] * scale,
-                Height              = _rasterH[idx] * scale,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment   = VerticalAlignment.Center
-            };
-            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-            paper.Children.Add(img);
+                _previewHost.Children.Add(BuildLoadingIndicator());
+                _pageLabel.Text = $"Rendering {_loadedCount} / {_pages.Length}";
+                return;
+            }
 
-            var vb = new Viewbox { Child = paper, Stretch = Stretch.Uniform, Margin = new Thickness(20) };
+            var paper = ComposeSheet(idxs, _areaW, _areaH);
+
+            var vb = new Viewbox
+            {
+                Child = paper, Stretch = Stretch.Uniform, Margin = new Thickness(20),
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 14, ShadowDepth = 3, Direction = 270, Opacity = 0.5 }
+            };
             _previewHost.Children.Add(vb);
 
-            _pageLabel.Text = $"Page {idx + 1} of {_pages.Length}";
+            _pageLabel.Text = _nUp > 1
+                ? $"Sheet {sheet + 1} of {sheets}"
+                : string.Format(S("Str_PageOf"), sheet + 1, _pages.Length);
+        }
+
+        // Called (on the UI thread) by the background renderer as each page finishes.
+        public void SetRenderedPage(int index, BitmapSource src, int w, int h)
+        {
+            if (index < 0 || index >= _pages.Length) return;
+            _pages[index]   = src;
+            _rasterW[index] = w;
+            _rasterH[index] = h;
+            _loadedCount++;
+
+            int first = _previewIndex * _nUp;
+            bool onCurrentSheet = index >= first && index < first + _nUp;
+            if (onCurrentSheet)
+                UpdatePreview();                 // reveal the page (or keep spinner if sheet incomplete)
+            else if (_isLoading)
+                _pageLabel.Text = $"Rendering {_loadedCount} / {_pages.Length}";
+        }
+
+        // Called once every page has rendered: enables Print and finalizes the preview.
+        public void FinishLoading()
+        {
+            _isLoading = false;
+            if (_printBtn != null) _printBtn.IsEnabled = true;
+            UpdatePreview();
+        }
+
+        public void LoadFailed(string message)
+        {
+            _isLoading = false;
+            _previewHost.Children.Clear();
+            _previewHost.Children.Add(new TextBlock
+            {
+                Text                = "Could not render preview:\n" + message,
+                Foreground          = R("TextSecondary"),
+                TextWrapping        = TextWrapping.Wrap,
+                TextAlignment       = TextAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment   = VerticalAlignment.Center,
+                Margin              = new Thickness(24)
+            });
+        }
+
+        // Spinning ring + progress text shown in the preview area while pages render.
+        private UIElement BuildLoadingIndicator()
+        {
+            var sp = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            var ring = new System.Windows.Shapes.Ellipse
+            {
+                Width = 36, Height = 36, StrokeThickness = 3,
+                Stroke = R("TextSecondary"),
+                StrokeDashArray = new DoubleCollection { 22, 200 },
+                StrokeDashCap = PenLineCap.Round,
+                RenderTransformOrigin = new Point(0.5, 0.5)
+            };
+            var rot = new RotateTransform();
+            ring.RenderTransform = rot;
+            rot.BeginAnimation(RotateTransform.AngleProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, 360, new Duration(TimeSpan.FromSeconds(0.9)))
+                { RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever });
+            sp.Children.Add(ring);
+            sp.Children.Add(new TextBlock
+            {
+                Text                = $"Rendering {_loadedCount} / {_pages.Length}",
+                Foreground          = R("TextSecondary"),
+                FontSize            = 12,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin              = new Thickness(0, 12, 0, 0)
+            });
+            return sp;
         }
 
         private void DoPrint()
@@ -446,6 +976,8 @@ namespace KillerPDF
                 var ticket = pd.PrintTicket;
                 ticket.CopyCount      = copies;
                 ticket.PageOrientation = _landscape ? PageOrientation.Landscape : PageOrientation.Portrait;
+                if (_duplex) ticket.Duplexing = Duplexing.TwoSidedLongEdge;
+                ticket.OutputColor = _grayscale ? OutputColor.Grayscale : OutputColor.Color;
                 pd.PrintTicket = ticket;
 
                 double aw = pd.PrintableAreaWidth, ah = pd.PrintableAreaHeight;
@@ -454,18 +986,17 @@ namespace KillerPDF
                 if (aw <= 0 || ah <= 0) { aw = _areaW; ah = _areaH; }
 
                 var fixedDoc = new FixedDocument();
-                foreach (int idx in indices)
+                // Group the selected pages into sheets of _nUp and compose each sheet (margins +
+                // alignment + scale are all handled inside ComposeSheet, shared with the preview).
+                for (int start = 0; start < indices.Count; start += _nUp)
                 {
-                    double scale = Math.Min(aw / _rasterW[idx], ah / _rasterH[idx]);
-                    double iw = _rasterW[idx] * scale;
-                    double ih = _rasterH[idx] * scale;
+                    var chunk = indices.Skip(start).Take(_nUp).ToList();
 
-                    var fp  = new FixedPage { Width = aw, Height = ah };
-                    var img = new Image { Source = _pages[idx], Width = iw, Height = ih };
-                    RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-                    FixedPage.SetLeft(img, (aw - iw) / 2);
-                    FixedPage.SetTop(img, (ah - ih) / 2);
-                    fp.Children.Add(img);
+                    var fp = new FixedPage { Width = aw, Height = ah };
+                    var sheet = ComposeSheet(chunk, aw, ah);
+                    FixedPage.SetLeft(sheet, 0);
+                    FixedPage.SetTop(sheet, 0);
+                    fp.Children.Add(sheet);
                     fp.Measure(new Size(aw, ah));
                     fp.Arrange(new Rect(new Point(), new Size(aw, ah)));
 
@@ -540,17 +1071,24 @@ namespace KillerPDF
 
         private static Button MakeButton(string label, bool accent)
         {
-            return new Button
+            var normalBg = accent ? R("AccentDim") : R("BgPanel");
+            var hoverBg  = accent ? R("Accent")    : R("BgHover");
+            var normalFg = accent ? R("Accent")    : R("TextPrimary");
+            var hoverFg  = accent ? R("BgModal")   : R("TextPrimary");   // accent fills on hover -> dark text
+            var btn = new Button
             {
                 Content         = label,
                 Padding         = new Thickness(18, 6, 18, 6),
-                Background      = accent ? R("AccentDim") : R("BgPanel"),
-                Foreground      = accent ? R("Accent") : R("TextPrimary"),
+                Background      = normalBg,
+                Foreground      = normalFg,
                 BorderBrush     = accent ? R("Accent") : R("BorderDim"),
                 BorderThickness = new Thickness(1),
                 Cursor          = Cursors.Hand,
                 Template        = MakeBtnTemplate()
             };
+            btn.MouseEnter += (_, _) => { btn.Background = hoverBg; btn.Foreground = hoverFg; };
+            btn.MouseLeave += (_, _) => { btn.Background = normalBg; btn.Foreground = normalFg; };
+            return btn;
         }
     }
 }

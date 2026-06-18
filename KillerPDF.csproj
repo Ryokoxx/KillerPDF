@@ -10,9 +10,9 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Resources\kp-icon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.5.1</Version>
-    <AssemblyVersion>1.5.1.0</AssemblyVersion>
-    <FileVersion>1.5.1.0</FileVersion>
+    <Version>1.5.2</Version>
+    <AssemblyVersion>1.5.2.0</AssemblyVersion>
+    <FileVersion>1.5.2.0</FileVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -44,6 +44,7 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Printing" />
     <Reference Include="ReachFramework" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 
   <ItemGroup>
@@ -52,6 +53,7 @@
 
   <ItemGroup>
     <Resource Include="Resources\kp-icon.ico" />
+    <Resource Include="Resources\kp-icon.png" />
   </ItemGroup>
 
   <!-- GPL3 source bundle: produces <AppName>-<Version>-src.zip in the publish folder every time you Publish. -->

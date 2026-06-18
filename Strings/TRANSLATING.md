@@ -7,6 +7,8 @@ Each language is a single XAML `ResourceDictionary` file in this folder. The fil
 - `en-US.xaml` - English (US)
 - `es.xaml` - Spanish
 - `zh-TW.xaml` - Traditional Chinese
+- `bn.xaml` - Bengali
+- `tr-TR.xaml` - Turkish
 
 ## How to contribute
 

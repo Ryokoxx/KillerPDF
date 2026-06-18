@@ -1,9 +1,13 @@
+using System;
 using System.Windows;
 using System.Windows.Media;
 
 namespace KillerPDF
 {
-    public enum EditTool { Select, Text, Highlight, Draw, Signature, Image, Crop }
+    public enum EditTool { Select, Text, Highlight, Strikethrough, Underline, Draw, Signature, Image, Crop }
+
+    /// <summary>How a HighlightAnnotation paints over its bounds.</summary>
+    public enum HighlightStyle { Fill, Strikethrough, Underline }
 
     public abstract class PageAnnotation
     {
@@ -52,6 +56,7 @@ namespace KillerPDF
     public class HighlightAnnotation : PageAnnotation
     {
         public Rect Bounds { get; set; }
+        public HighlightStyle Style { get; set; } = HighlightStyle.Fill;
         public byte ColorR { get; set; } = 255;
         public byte ColorG { get; set; } = 255;
         public byte ColorB { get; set; } = 0;
@@ -59,6 +64,24 @@ namespace KillerPDF
 
         public Color GetColor() => Color.FromArgb(ColorA, ColorR, ColorG, ColorB);
         public void SetColor(Color c) { ColorR = c.R; ColorG = c.G; ColorB = c.B; ColorA = c.A; }
+
+        /// <summary>
+        /// The actual rectangle painted for this annotation. Fill uses the whole bounds;
+        /// strikethrough is a thin band at the vertical centre; underline sits at the bottom.
+        /// </summary>
+        public Rect DrawRect()
+        {
+            double t = Math.Max(2.0, Bounds.Height * 0.10);
+            switch (Style)
+            {
+                case HighlightStyle.Strikethrough:
+                    return new Rect(Bounds.X, Bounds.Y + Bounds.Height / 2 - t / 2, Bounds.Width, t);
+                case HighlightStyle.Underline:
+                    return new Rect(Bounds.X, Bounds.Y + Bounds.Height - t, Bounds.Width, t);
+                default:
+                    return Bounds;
+            }
+        }
     }
 
     /// <summary>
