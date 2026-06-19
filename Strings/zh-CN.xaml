@@ -265,6 +265,7 @@
     <sys:String x:Key="Str_Menu_SaveNothing">没有可保存的内容</sys:String>
     <sys:String x:Key="Str_Menu_RecentNone">没有最近的文件</sys:String>
     <sys:String x:Key="Str_Menu_ClearList">清除列表</sys:String>
+    <sys:String x:Key="Str_Menu_RemoveFromRecents">从最近移除</sys:String>
     <sys:String x:Key="Str_Sig_Title">签名</sys:String>
     <sys:String x:Key="Str_Sig_None">没有已保存的签名</sys:String>
     <sys:String x:Key="Str_Sig_Create">创建签名</sys:String>

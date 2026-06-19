@@ -112,6 +112,14 @@ namespace KillerPDF
         private string _resizeCorner = "SE";                    // which corner is being dragged
         private Point _resizeAnchor;                            // opposite corner, held fixed during resize
 
+        // Mid-edit resize handles: 4 corners shown around the live editing TextBox so the user can
+        // resize the box (and continue typing) without committing and re-selecting first.
+        private readonly List<Rectangle> _textEditHandles = [];
+        private bool _draggingTextEditHandle;
+        private string _tehCorner = "SE";
+        private Point _tehAnchor;
+        private TextBox? _tehBox;
+
         // Placed annotation drag-to-move
         private bool _isDraggingAnnot;
         private Point _dragAnnotStart;
@@ -339,12 +347,14 @@ namespace KillerPDF
             ToolbarUnderRadio.IsChecked  = _toolbarStyle == ToolbarStyle.TextUnder;
             ToolbarOnlyRadio.IsChecked   = _toolbarStyle == ToolbarStyle.TextOnly;
             ToolbarCurrentLabel.Text     = ToolbarStyleName(_toolbarStyle);
+            // Reopen to the section the user last had expanded.
+            if (_lastSettingsSection != null) _lastSettingsSection.IsChecked = true;
             PositionSettingsPanel();
             SettingsOverlay.Visibility = Visibility.Visible;
             SlideSettingsOpen();
         }
 
-        private const double SettingsPanelWidth = 160;
+        private const double SettingsPanelWidth = 210;
 
         // Expands the panel out of the sidebar (Width grows from the flush left edge). Clipped while
         // animating so it reveals left-to-right; clip is dropped at the end so the drop shadow shows.
@@ -376,8 +386,57 @@ namespace KillerPDF
                 SettingsPanel.BeginAnimation(FrameworkElement.WidthProperty, null);
                 SettingsPanel.Width = SettingsPanelWidth;
                 SettingsPanel.ClipToBounds = false;
+                HideAllSettingsSubmenus();   // collapse expanded sections so it reopens clean
             };
             SettingsPanel.BeginAnimation(FrameworkElement.WidthProperty, anim);
+        }
+
+        // ── Settings submenus: inline accordion sections that expand in place below their row.
+        // Only one section is open at a time; picking an option leaves it open so options can be
+        // tried back to back. Replaces the old flyout Popups (no floating window, no resize capture).
+        private bool _settingsMenuSync;
+        // Remembers the section the user last expanded so it reopens to the same place.
+        private System.Windows.Controls.Primitives.ToggleButton? _lastSettingsSection;
+
+        private void SettingsMenu_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (_settingsMenuSync) return;
+            _settingsMenuSync = true;
+            try
+            {
+                var opened = sender as System.Windows.Controls.Primitives.ToggleButton;
+                if (opened != null && opened.IsChecked == true) _lastSettingsSection = opened;
+                SyncSettingsSubmenu(LangMenuButton, LangSubmenu, opened);
+                SyncSettingsSubmenu(ThemeMenuButton, ThemeSubmenu, opened);
+                SyncSettingsSubmenu(ToolbarMenuButton, ToolbarSubmenu, opened);
+                SyncSettingsSubmenu(ViewMenuButton, ViewSubmenu, opened);
+            }
+            finally { _settingsMenuSync = false; }
+        }
+
+        private void SyncSettingsSubmenu(System.Windows.Controls.Primitives.ToggleButton btn,
+                                         System.Windows.Controls.StackPanel panel,
+                                         System.Windows.Controls.Primitives.ToggleButton? opened)
+        {
+            bool show;
+            if (btn == opened) show = btn.IsChecked == true;          // the toggled row follows its own state
+            else { if (btn.IsChecked == true) btn.IsChecked = false; show = false; }   // collapse the others
+            panel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void HideAllSettingsSubmenus()
+        {
+            _settingsMenuSync = true;
+            try
+            {
+                foreach (var b in new[] { LangMenuButton, ThemeMenuButton, ToolbarMenuButton, ViewMenuButton })
+                    b.IsChecked = false;
+                LangSubmenu.Visibility = Visibility.Collapsed;
+                ThemeSubmenu.Visibility = Visibility.Collapsed;
+                ToolbarSubmenu.Visibility = Visibility.Collapsed;
+                ViewSubmenu.Visibility = Visibility.Collapsed;
+            }
+            finally { _settingsMenuSync = false; }
         }
 
         // Non-modal Settings: a mouse-down anywhere outside the panel dismisses it WITHOUT swallowing the
@@ -578,7 +637,7 @@ namespace KillerPDF
             if (ThemeCurrentLabel is not null)   ThemeCurrentLabel.Text   = ThemeDisplayName(ThemeManager.Current);
             if (ToolbarCurrentLabel is not null) ToolbarCurrentLabel.Text = ToolbarStyleName(_toolbarStyle);
             if (ViewCurrentLabel is not null)    ViewCurrentLabel.Text    = ViewModeDisplayName(_viewMode);
-            LangMenuButton.IsChecked = false;   // closes the flyout (Popup.IsOpen is bound to this)
+            LangMenuButton.IsChecked = false;   // collapses the inline language section after a pick
 
             // The status bar text is a formatted string (not a DynamicResource), so it keeps the
             // language it was last set in. Re-set it in the new locale instead of leaving it stale.
@@ -785,6 +844,18 @@ namespace KillerPDF
             if (_toolbarButtons.Count == 0) return;
             foreach (var (btn, glyph, key) in _toolbarButtons)
                 SetToolbarButton(btn, glyph, key, withLabel: true);
+            // Open/Save are split buttons whose dropdown chevron overlaps the icon (-6) for the connected
+            // split look in icon modes. With a caption the button widens, so the chevron must sit clear of
+            // the text instead of over its last letter; the main half also drops its hover inset (only
+            // needed when the chevron overlaps).
+            bool textMode = _toolbarStyle is ToolbarStyle.TextBeside or ToolbarStyle.TextUnder or ToolbarStyle.TextOnly;
+            var chevMargin = textMode ? new Thickness(1, 0, 0, 0) : new Thickness(-6, 0, 0, 0);
+            if (OpenRecentBtn is not null) OpenRecentBtn.Margin = chevMargin;
+            if (SaveMenuBtn   is not null) SaveMenuBtn.Margin   = chevMargin;
+            if (OpenFileBtn is not null)
+                OpenFileBtn.Style = (Style)FindResource(textMode ? "ToolbarButton" : "ToolbarSplitMain");
+            if (SaveAsBtn is not null)
+                SaveAsBtn.Style = (Style)FindResource(textMode ? "ToolbarButtonAccent" : "ToolbarSplitMainAccent");
             ReflowToolbar();
         }
 
@@ -1191,17 +1262,31 @@ namespace KillerPDF
                 double left = Math.Max(0, Math.Min(maxLeft, frac * area.ActualWidth - w / 2));
                 bar.HorizontalAlignment = HorizontalAlignment.Left;
                 bar.Margin = new Thickness(left, bar.Margin.Top, 0, 0);
+                SetBarDockedBorder(bar, dockedLeft: false, dockedRight: false);
             }
             else if (_annotBarAnchorRight)
             {
+                double g = Math.Min(maxLeft, _annotBarGap ?? 8);
                 bar.HorizontalAlignment = HorizontalAlignment.Right;
-                bar.Margin = new Thickness(0, bar.Margin.Top, Math.Min(maxLeft, _annotBarGap ?? 8), 0);
+                bar.Margin = new Thickness(0, bar.Margin.Top, g, 0);
+                SetBarDockedBorder(bar, dockedLeft: false, dockedRight: g <= 0.5);
             }
             else
             {
+                double g = Math.Min(maxLeft, _annotBarGap ?? 8);
                 bar.HorizontalAlignment = HorizontalAlignment.Left;
-                bar.Margin = new Thickness(Math.Min(maxLeft, _annotBarGap ?? 8), bar.Margin.Top, 0, 0);
+                bar.Margin = new Thickness(g, bar.Margin.Top, 0, 0);
+                SetBarDockedBorder(bar, dockedLeft: g <= 0.5, dockedRight: false);
             }
+        }
+
+        // When the bar is docked flush against a side, drop its own 1px border on that side and swap it
+        // for 1px of padding. The document pane's border (same brush) then serves as the single shared
+        // edge line - no 2px double border, and no size or position change (so nothing jumps).
+        private static void SetBarDockedBorder(Border bar, bool dockedLeft, bool dockedRight)
+        {
+            bar.BorderThickness = new Thickness(dockedLeft ? 0 : 1, 0, dockedRight ? 0 : 1, 1);
+            bar.Padding = new Thickness(dockedLeft ? 5 : 4, 4, dockedRight ? 5 : 4, 4);
         }
 
         // Snapping changes the window's position/size but NOT its WindowState (it stays Normal), so
@@ -3191,13 +3276,23 @@ namespace KillerPDF
                         node = parentItem as PdfDictionary ?? DerefItem(parentItem) as PdfDictionary;
                     }
 
-                    if (string.IsNullOrEmpty(ft)) ft = "/Tx";
+                    // No resolvable field type (directly or inherited) means this Widget is not a fillable
+                    // field (just a bare annotation widget). Skip it rather than guessing it's a text box.
+                    if (string.IsNullOrEmpty(ft)) continue;
 
                     bool isReadOnly  = (flags & 1) != 0;
                     bool isMultiLine = ft.Contains("Tx") && (flags & 4096) != 0;
                     bool isPushBtn   = ft.Contains("Btn") && (flags & (1 << 16)) != 0;
                     bool isRadio     = ft.Contains("Btn") && !isPushBtn && (flags & (1 << 15)) != 0;
                     bool isCheckBox  = ft.Contains("Btn") && !isPushBtn && !isRadio;
+
+                    // A button widget that fires an action (navigation /GoTo, /URI, JavaScript, ...) is a
+                    // pushbutton/link, not a fillable control. Some PDFs - e.g. manuals with a clickable
+                    // page index down one side - omit the pushbutton flag, which would otherwise make every
+                    // one of those render as a spurious checkbox. Treat any actioned button as a pushbutton.
+                    // (A real checkbox/radio always carries an /AS appearance state; a pushbutton does not.)
+                    if (ft.Contains("Btn") && (isPushBtn || ann.Elements["/A"] is not null || ann.Elements["/AS"] is null))
+                        continue;
 
                     // Extract the "on" value for this widget (radio/checkbox selected state).
                     // Found in /AP /N as the key that is NOT /Off.
@@ -4921,6 +5016,9 @@ namespace KillerPDF
                 double maxLeft = Math.Max(0, bounds.ActualWidth - w);
                 double nl = Math.Max(0, Math.Min(maxLeft, origLeft + (e.GetPosition(bounds).X - startX)));
                 bar.Margin = new Thickness(nl, bar.Margin.Top, 0, 0);
+                // Merge the docked-side border with the pane border live while dragging (no footprint
+                // change), so it doesn't pop in on release.
+                SetBarDockedBorder(bar, dockedLeft: nl <= 0.5, dockedRight: nl >= maxLeft - 0.5);
             };
             grip.MouseLeftButtonUp += (s, e) =>
             {
@@ -6465,6 +6563,35 @@ namespace KillerPDF
         {
             if (_doc is null) return;
             if (sender is Canvas srcCanvas) _activeCanvas = srcCanvas;
+            // A click on a live text-edit corner handle starts a free-form resize. Checked FIRST, before
+            // the "click inside the editing box" guard below: that guard tests OriginalSource, which is
+            // unreliable across the nested transparent canvases, so it can otherwise swallow a corner
+            // click right after placement. This is a reliable position-based hit test.
+            if (_textEditHandles.Count > 0 && _tehBox is not null)
+            {
+                var hpos = e.GetPosition(_activeCanvas);
+                string? corner = TextEditHandleAt(hpos);
+                if (corner is not null)
+                {
+                    _tehCorner = corner;
+                    double bx = Canvas.GetLeft(_tehBox), by = Canvas.GetTop(_tehBox);
+                    double bw = _tehBox.ActualWidth  > 0 ? _tehBox.ActualWidth  : _tehBox.Width;
+                    double bh = _tehBox.ActualHeight > 0 ? _tehBox.ActualHeight : Math.Max(_tehBox.MinHeight, 24);
+                    _tehAnchor = _tehCorner switch
+                    {
+                        "NW" => new Point(bx + bw, by + bh),
+                        "NE" => new Point(bx,      by + bh),
+                        "SW" => new Point(bx + bw, by),
+                        _    => new Point(bx,      by)   // SE
+                    };
+                    _draggingTextEditHandle = true;
+                    _gestureCanvas = _activeCanvas;
+                    _gesturePage   = _activeCanvas.Tag is int tp ? tp : PageList.SelectedIndex;
+                    _activeCanvas.CaptureMouse();
+                    e.Handled = true;
+                    return;
+                }
+            }
             // Don't intercept clicks on an active text editing box
             if (_activeTextBox is not null && e.OriginalSource is DependencyObject src &&
                 IsDescendantOf(src, _activeTextBox))
@@ -6635,6 +6762,15 @@ namespace KillerPDF
                     break;
 
                 case EditTool.Text:
+                    // A click inside the box that's already being edited must NOT commit-and-replace it
+                    // (that makes the box appear to jump to the cursor). In Grid view a per-tile overlay
+                    // can sit above the TextBox, so the OriginalSource guard near the top of this method
+                    // misses the hit; a bounds check on the box's own canvas catches it reliably.
+                    if (ClickInsideActiveTextBox(pos))
+                    {
+                        e.Handled = true;
+                        break;
+                    }
                     CommitActiveTextBox();
                     PlaceTextBox(pos, pageIdx);
                     e.Handled = true;
@@ -6737,6 +6873,21 @@ namespace KillerPDF
             var pos = e.GetPosition(gc);
             pos.X = Math.Max(0, Math.Min(gc.ActualWidth, pos.X));
             pos.Y = Math.Max(0, Math.Min(gc.ActualHeight, pos.Y));
+
+            // Live text-edit box resize (mid-edit corner handles): free-form, opposite corner held fixed.
+            if (_draggingTextEditHandle && _tehBox is not null)
+            {
+                double newW = Math.Max(40, Math.Abs(pos.X - _tehAnchor.X));
+                double newH = Math.Max(24, Math.Abs(pos.Y - _tehAnchor.Y));
+                double nx = (_tehCorner is "NW" or "SW") ? _tehAnchor.X - newW : _tehAnchor.X;
+                double ny = (_tehCorner is "NW" or "NE") ? _tehAnchor.Y - newH : _tehAnchor.Y;
+                Canvas.SetLeft(_tehBox, nx);
+                Canvas.SetTop(_tehBox, ny);
+                _tehBox.Width  = newW;
+                _tehBox.Height = newH;
+                LayoutTextEditHandles();
+                return;
+            }
 
             // Text box resize drag: width follows the dragged corner; height auto-fits the wrapped text.
             if (_isResizingSig && _resizeTextAnnot is not null)
@@ -6964,6 +7115,16 @@ namespace KillerPDF
             int pageIdx = _gesturePage >= 0
                 ? _gesturePage
                 : (_activeCanvas?.Tag is int tagPage ? tagPage : PageList.SelectedIndex);
+
+            // Finish a live text-edit box resize and hand focus back so typing continues.
+            if (_draggingTextEditHandle)
+            {
+                _draggingTextEditHandle = false;
+                _activeCanvas?.ReleaseMouseCapture();
+                _tehBox?.Focus();
+                e.Handled = true;
+                return;
+            }
 
             // Finish crop handle drag
             if (_activeCropHandleTag is not null)
@@ -7724,7 +7885,7 @@ namespace KillerPDF
 
                 var searchIcon = new TextBlock
                 {
-                    Text = "",  // Segoe MDL2 Search / magnifying glass
+                    Text = "",  // Segoe MDL2 Search / magnifying glass
                     FontFamily = new FontFamily("Segoe MDL2 Assets"),
                     FontSize = 12,
                     Foreground = (SolidColorBrush)FindResource("TextSecondary"),
@@ -8091,7 +8252,7 @@ namespace KillerPDF
                     _activeCanvas.Children.Add(ptb);
                     _activeTextBox = ptb;
                     ptb.KeyDown += TextBox_KeyDown;
-                    ptb.Loaded += (s, ev) => { ptb.Focus(); Keyboard.Focus(ptb); ptb.SelectAll(); ptb.LostFocus += TextBox_LostFocus; };
+                    ptb.Loaded += (s, ev) => { ptb.Focus(); Keyboard.Focus(ptb); ptb.SelectAll(); ptb.LostFocus += TextBox_LostFocus; AttachTextEditResizeHandles(ptb); };
                     ShowTextSettings();
                     SetStatus("Editing text — change size/color above, Enter to save");
                     return;
@@ -8371,10 +8532,24 @@ namespace KillerPDF
         }
 
         // Background shown WHILE editing a text box: the chosen fill if one is set, otherwise a faint
-        // translucent white so the empty editable box is still visible against the page.
+        // translucent neutral gray. Gray (not white) so the empty editable box stays visible on both
+        // light/white pages and dark pages; it's only shown during editing and never committed.
         private Brush TextEditBackground()
             => _textFillColor.A > 0 ? new SolidColorBrush(_textFillColor)
-                                    : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                                    : new SolidColorBrush(Color.FromArgb(64, 128, 128, 128));
+
+        // True when 'pos' (in _activeCanvas coordinates) falls inside the text box currently being
+        // edited AND that box lives on _activeCanvas. Used so a click inside the box doesn't get
+        // treated as a request to place a new one (the Grid-view "box jumps to cursor" bug).
+        private bool ClickInsideActiveTextBox(Point pos)
+        {
+            if (_activeTextBox is null || !ReferenceEquals(_activeTextBox.Parent, _activeCanvas)) return false;
+            double x = Canvas.GetLeft(_activeTextBox), y = Canvas.GetTop(_activeTextBox);
+            if (double.IsNaN(x) || double.IsNaN(y)) return false;
+            double w = _activeTextBox.ActualWidth  > 0 ? _activeTextBox.ActualWidth  : _activeTextBox.Width;
+            double h = _activeTextBox.ActualHeight > 0 ? _activeTextBox.ActualHeight : Math.Max(_activeTextBox.MinHeight, 24);
+            return pos.X >= x && pos.X <= x + w && pos.Y >= y && pos.Y <= y + h;
+        }
 
         private void PlaceTextBox(Point pos, int pageIdx)
         {
@@ -8417,13 +8592,92 @@ namespace KillerPDF
                 tb.Focus();
                 Keyboard.Focus(tb);
                 tb.LostFocus += TextBox_LostFocus;
+                AttachTextEditResizeHandles(tb);
             };
+        }
+
+        // ── Live resize handles around the editing TextBox ──────────────────────────────
+        // Corner squares the user can drag to resize the box mid-edit, then keep typing. The
+        // box auto-grows in height until a handle is dragged, after which the height is free-form.
+        private void AttachTextEditResizeHandles(TextBox tb)
+        {
+            RemoveTextEditHandles();
+            _tehBox = tb;
+            double inv = 1.0;
+            if (_activeCanvas.LayoutTransform is ScaleTransform sc && sc.ScaleX > 0.0001) inv = 1.0 / sc.ScaleX;
+            double hs = 12 * inv;
+            foreach (string tag in new[] { "NW", "NE", "SE", "SW" })
+            {
+                var hd = new Rectangle
+                {
+                    Width = hs, Height = hs,
+                    Fill = AccentBrush(),
+                    Stroke = Brushes.White, StrokeThickness = 1 * inv,
+                    Cursor = (tag is "NW" or "SE") ? Cursors.SizeNWSE : Cursors.SizeNESW,
+                    Focusable = false,   // so grabbing a handle does not blur (and commit) the TextBox
+                    Tag = tag
+                };
+                Panel.SetZIndex(hd, 200);
+                // Hit detection + drag are handled in the canvas gesture handlers (which run as
+                // PreviewMouseLeftButtonDown and would otherwise intercept the click), mirroring the
+                // committed-annotation resize handles.
+                _textEditHandles.Add(hd);
+                _activeCanvas.Children.Add(hd);
+            }
+            tb.SizeChanged += TextEditBox_SizeChanged;
+            LayoutTextEditHandles();
+        }
+
+        private void TextEditBox_SizeChanged(object sender, SizeChangedEventArgs e) => LayoutTextEditHandles();
+
+        private void LayoutTextEditHandles()
+        {
+            if (_tehBox is null || _textEditHandles.Count == 0) return;
+            double x = Canvas.GetLeft(_tehBox), y = Canvas.GetTop(_tehBox);
+            double w = _tehBox.ActualWidth > 0 ? _tehBox.ActualWidth : _tehBox.Width;
+            double h = _tehBox.ActualHeight;
+            foreach (var hd in _textEditHandles)
+            {
+                double hsz = hd.Width;
+                (double cx, double cy) = (hd.Tag as string) switch
+                {
+                    "NW" => (x,     y),
+                    "NE" => (x + w, y),
+                    "SW" => (x,     y + h),
+                    _    => (x + w, y + h)   // SE
+                };
+                Canvas.SetLeft(hd, cx - hsz / 2);
+                Canvas.SetTop(hd, cy - hsz / 2);
+            }
+        }
+
+        private void RemoveTextEditHandles()
+        {
+            if (_tehBox is not null) _tehBox.SizeChanged -= TextEditBox_SizeChanged;
+            foreach (var hd in _textEditHandles) _activeCanvas.Children.Remove(hd);
+            _textEditHandles.Clear();
+            _tehBox = null;
+            _draggingTextEditHandle = false;
+        }
+
+        // Hit-test a live text-edit handle at the given canvas point; returns its corner tag or null.
+        private string? TextEditHandleAt(Point pos)
+        {
+            foreach (var hd in _textEditHandles)
+            {
+                double hx = Canvas.GetLeft(hd), hy = Canvas.GetTop(hd);
+                if (pos.X >= hx && pos.X <= hx + hd.Width &&
+                    pos.Y >= hy && pos.Y <= hy + hd.Height)
+                    return hd.Tag as string ?? "SE";
+            }
+            return null;
         }
 
         private void TextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Escape)
             {
+                RemoveTextEditHandles();
                 if (_activeTextBox is not null)
                 {
                     _activeCanvas.Children.Remove(_activeTextBox);
@@ -8449,6 +8703,8 @@ namespace KillerPDF
 
         private void TextBox_LostFocus(object sender, RoutedEventArgs e)
         {
+            // Don't commit while a resize handle is being dragged (the box temporarily loses focus).
+            if (_draggingTextEditHandle) return;
             // Only commit if the TextBox actually has content
             if (_activeTextBox is not null && !string.IsNullOrWhiteSpace(_activeTextBox.Text))
             {
@@ -8476,6 +8732,7 @@ namespace KillerPDF
             }
             var tb = _activeTextBox;
             _activeTextBox = null;
+            RemoveTextEditHandles();
             _reeditOriginal = null;   // committing replaces any annotation being re-edited
 
             string content = tb.Text.Trim();
@@ -8503,7 +8760,10 @@ namespace KillerPDF
                 };
                 ta.SetColor(tb.Foreground is SolidColorBrush scb ? scb.Color : Colors.Black);
                 ta.SetFill(_textFillColor);
-                ta.Height = MeasureTextBoxHeight(content, boxW, tb.FontSize);
+                // Free-form height if the box was manually resized; otherwise fit to the wrapped text.
+                ta.Height = (!double.IsNaN(tb.Height) && tb.Height > 0)
+                    ? tb.Height
+                    : MeasureTextBoxHeight(content, boxW, tb.FontSize);
                 AddAnnotation(ta);
                 RenderAllAnnotations(pageIdx);   // redraw on the correct page's canvas
             }
@@ -9208,6 +9468,7 @@ namespace KillerPDF
             _currentFile = null;
             App.RemoveSetting("LastFile");   // don't reopen a manually-closed file on next launch (Issue #75)
             _activeTextBox = null;   // cancel any in-progress typewriter edit before canvas clear
+            RemoveTextEditHandles();
             _annotations.Clear();
             _undoStack.Clear();
             _renderDims.Clear();
@@ -9381,6 +9642,47 @@ namespace KillerPDF
                 stack.Children.Add(pathTb);
                 stack.Children.Add(dateTb);
 
+                // Per-row remove button: a small X that fades in on hover and drops just this
+                // entry from the recents list (it does not touch the file on disk).
+                var delIcon = new TextBlock
+                {
+                    Text              = "",   // close (X) glyph below set via code
+                    FontFamily        = new FontFamily("Segoe MDL2 Assets"),
+                    FontSize          = 11,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                delIcon.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+                delIcon.Text = "";   // Segoe MDL2 ChromeClose (X)
+                var del = new Border
+                {
+                    Width             = 22,
+                    Height            = 22,
+                    Background        = System.Windows.Media.Brushes.Transparent,
+                    CornerRadius      = new CornerRadius(4),
+                    Cursor            = Cursors.Hand,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Opacity           = 0,   // hidden until the row is hovered
+                    Child             = delIcon,
+                    ToolTip           = Loc("Str_Menu_RemoveFromRecents")
+                };
+                del.MouseEnter += (_, _) => { del.Background = (SolidColorBrush)FindResource("BgHover"); delIcon.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary"); };
+                del.MouseLeave += (_, _) => { del.Background = System.Windows.Media.Brushes.Transparent; delIcon.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary"); };
+                del.MouseLeftButtonDown += (_, ev) =>
+                {
+                    ev.Handled = true;   // don't open the file
+                    App.RemoveRecentFile(path);
+                    PopulateRecentFilesList();
+                };
+
+                var rowGrid = new Grid();
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                Grid.SetColumn(stack, 0);
+                Grid.SetColumn(del, 1);
+                rowGrid.Children.Add(stack);
+                rowGrid.Children.Add(del);
+
                 var row = new Border
                 {
                     Background    = System.Windows.Media.Brushes.Transparent,
@@ -9388,11 +9690,11 @@ namespace KillerPDF
                     Padding       = new Thickness(8, 6, 8, 6),
                     Margin        = new Thickness(0, 1, 0, 1),
                     Cursor        = Cursors.Hand,
-                    Child         = stack,
+                    Child         = rowGrid,
                     ToolTip       = path
                 };
-                row.MouseEnter += (_, _) => row.Background = (SolidColorBrush)FindResource("BgHover");
-                row.MouseLeave += (_, _) => row.Background = System.Windows.Media.Brushes.Transparent;
+                row.MouseEnter += (_, _) => { row.Background = (SolidColorBrush)FindResource("BgHover"); del.Opacity = 1; };
+                row.MouseLeave += (_, _) => { row.Background = System.Windows.Media.Brushes.Transparent; del.Opacity = 0; };
                 row.MouseLeftButtonDown += (_, ev) =>
                 {
                     ev.Handled = true;   // don't bubble to the DropZone "click to browse" handler

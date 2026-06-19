@@ -88,6 +88,39 @@
         <Style x:Key="ToolbarButtonAccent" TargetType="Button" BasedOn="{StaticResource ToolbarButton}">
             <Setter Property="Foreground" Value="{DynamicResource AccentLogo}"/>
         </Style>
+        <!-- Main half of an Open/Save split button: its hover fill is inset on the right so it
+             stops just short of the overlapping dropdown chevron instead of running under it. -->
+        <Style x:Key="ToolbarSplitMain" TargetType="Button" BasedOn="{StaticResource ToolbarButton}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border x:Name="bg" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="3" Margin="0,0,7,0"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              ToolTip="{TemplateBinding ToolTip}">
+                                <ContentPresenter.Effect>
+                                    <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="2" Direction="270" Opacity="{DynamicResource IconShadowOpacity}"/>
+                                </ContentPresenter.Effect>
+                            </ContentPresenter>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource BgHover}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ToolbarSplitMainAccent" TargetType="Button" BasedOn="{StaticResource ToolbarSplitMain}">
+            <Setter Property="Foreground" Value="{DynamicResource AccentLogo}"/>
+        </Style>
         <Style x:Key="ToolbarButtonDanger" TargetType="Button" BasedOn="{StaticResource ToolbarButton}">
             <Setter Property="Foreground" Value="{DynamicResource DangerRed}"/>
         </Style>
@@ -212,6 +245,8 @@
                                     <Thumb>
                                         <Thumb.Style>
                                             <Style TargetType="Thumb">
+                                                <!-- Minimum thumb length so it stays grabbable on very long documents. -->
+                                                <Setter Property="MinHeight" Value="28"/>
                                                 <Setter Property="Template">
                                                     <Setter.Value>
                                                         <ControlTemplate TargetType="Thumb">
@@ -235,6 +270,13 @@
                                                         </ControlTemplate>
                                                     </Setter.Value>
                                                 </Setter>
+                                                <Style.Triggers>
+                                                    <!-- Horizontal bar: enforce the minimum along the X axis instead. -->
+                                                    <DataTrigger Binding="{Binding Orientation, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="Horizontal">
+                                                        <Setter Property="MinHeight" Value="0"/>
+                                                        <Setter Property="MinWidth" Value="28"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
                                             </Style>
                                         </Thumb.Style>
                                     </Thumb>
@@ -388,8 +430,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="MenuBd" Property="Background" Value="{DynamicResource AccentDim}"/>
-                                <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+                                <Setter TargetName="MenuBd" Property="Background" Value="{DynamicResource BgHover}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -794,9 +835,9 @@
                     <!-- File: New / Open / Close / Save / Print -->
                     <Button Content="&#xE7C3;" Style="{StaticResource ToolbarButton}" Click="New_Click" ToolTip="{DynamicResource Str_TT_NewBlank}"/>
                     <Button x:Name="CloseFileBtn" Content="&#xE711;" Style="{StaticResource ToolbarButton}" Click="CloseFile_Click" ToolTip="{DynamicResource Str_TT_CloseFile}" IsEnabled="False"/>
-                    <Button Content="&#xE8DA;" Style="{StaticResource ToolbarButton}" Click="Open_Click" ToolTip="{DynamicResource Str_TT_Open}"/>
+                    <Button x:Name="OpenFileBtn" Content="&#xE8DA;" Style="{StaticResource ToolbarSplitMain}" Click="Open_Click" ToolTip="{DynamicResource Str_TT_Open}"/>
                     <Button x:Name="OpenRecentBtn" Content="&#xF08E;" FontSize="10" Width="13" Padding="0" Margin="-6,0,0,0" Style="{StaticResource ToolbarButton}" Click="OpenRecent_Click" ToolTip="Recent files"/>
-                    <Button x:Name="SaveAsBtn" Content="&#xE74E;" Style="{StaticResource ToolbarButtonAccent}" Click="Save_Click" ToolTip="{DynamicResource Str_TT_Save}"/>
+                    <Button x:Name="SaveAsBtn" Content="&#xE74E;" Style="{StaticResource ToolbarSplitMainAccent}" Click="Save_Click" ToolTip="{DynamicResource Str_TT_Save}"/>
                     <Button x:Name="SaveMenuBtn" Content="&#xF08E;" FontSize="10" Width="13" Padding="0" Margin="-6,0,0,0" Style="{StaticResource ToolbarButton}" Click="SaveMenu_Click" ToolTip="Save options"/>
                     <Button Content="&#xE8B9;" Style="{StaticResource ToolbarButton}" Click="SaveFlattened_Click" ToolTip="{DynamicResource Str_TT_SaveFlattened}"/>
                     <Button Content="&#xE749;" Style="{StaticResource ToolbarButton}" Click="Print_Click" ToolTip="{DynamicResource Str_TT_Print}"/>
@@ -1044,13 +1085,14 @@
                                  MouseRightButtonUp="PageList_MouseRightButtonUp">
                             <ListBox.ItemTemplate>
                                 <DataTemplate DataType="{x:Type local:PageThumbnailVm}">
-                                    <StackPanel HorizontalAlignment="Center" Margin="0,2,0,2">
+                                    <!-- Thumbnail scales to the sidebar width (the item stretches) with side
+                                         margins that clear the scrollbar, so it never gets clipped. -->
+                                    <StackPanel Margin="8,2,8,2">
                                         <Border x:Name="ThumbBorder"
                                                 Background="White"
                                                 BorderBrush="{DynamicResource BgDark}"
                                                 BorderThickness="1">
                                             <Image Source="{Binding Thumbnail}"
-                                                   Width="140"
                                                    Stretch="Uniform"/>
                                         </Border>
                                         <TextBlock Text="{Binding Label}"
@@ -1395,14 +1437,14 @@
               Grid.RowSpan="4"
               Panel.ZIndex="9999"
               Visibility="Collapsed">
-            <Grid x:Name="SettingsPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="186,0,0,36" Width="160">
+            <Grid x:Name="SettingsPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="186,0,0,36" Width="210">
                 <!-- Left edge stays flush against the sidebar's right edge; the panel expands rightward
                      out of the sidebar (its Width animates) and shrinks back into it on close. The inner
                      borders keep a fixed width so the content doesn't reflow while the Grid is clipped. -->
                 <!-- Opaque body + shadow, using the same BgPanel + film grain as the annotate bar. No
                      left border / left corners - that edge sits against the sidebar. -->
                 <Border Background="{DynamicResource BgFlyout}" CornerRadius="0,6,6,0" IsHitTestVisible="False"
-                        Width="160" HorizontalAlignment="Left">
+                        Width="210" HorizontalAlignment="Left">
                     <Border.Effect>
                         <!-- Offset right (Direction 0) with depth >= blur so the shadow falls to the
                              right/below and never bleeds left over the sidebar. -->
@@ -1410,12 +1452,12 @@
                     </Border.Effect>
                 </Border>
                 <Border Background="{DynamicResource GrainBrushShared}" Opacity="0.035"
-                        CornerRadius="0,6,6,0" Width="160" HorizontalAlignment="Left" IsHitTestVisible="False"/>
+                        CornerRadius="0,6,6,0" Width="210" HorizontalAlignment="Left" IsHitTestVisible="False"/>
                 <Border Background="Transparent"
                         BorderBrush="{DynamicResource AccentBorder}"
                         BorderThickness="0,1,1,1"
                         CornerRadius="0,6,6,0"
-                        Width="160" HorizontalAlignment="Left"
+                        Width="210" HorizontalAlignment="Left"
                         Padding="20,16,20,20"
                         MouseLeftButtonDown="SettingsOverlayCard_MouseLeftButtonDown"
                         MouseRightButtonDown="SettingsOverlayCard_MouseLeftButtonDown">
@@ -1459,6 +1501,7 @@
                          number of languages without translating each name into every locale. -->
                     <Grid Margin="0,0,0,4">
                         <ToggleButton x:Name="LangMenuButton"
+                                      Checked="SettingsMenu_Toggled" Unchecked="SettingsMenu_Toggled"
                                       Cursor="Hand" FocusVisualStyle="{x:Null}"
                                       HorizontalAlignment="Stretch"
                                       HorizontalContentAlignment="Stretch">
@@ -1478,37 +1521,34 @@
                                 </ControlTemplate>
                             </ToggleButton.Template>
                             <DockPanel LastChildFill="True">
-                                <TextBlock DockPanel.Dock="Right" Text="&#xE76C;"
+                                <TextBlock DockPanel.Dock="Right"
                                            FontFamily="Segoe MDL2 Assets" FontSize="10"
                                            VerticalAlignment="Center" Margin="6,0,0,0"
-                                           Foreground="{DynamicResource TextSecondary}"/>
+                                           Foreground="{DynamicResource TextSecondary}">
+                                    <!-- Up chevron when the section is collapsed, down when expanded. -->
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="&#xE70E;"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsChecked, RelativeSource={RelativeSource AncestorType=ToggleButton}}" Value="True">
+                                                    <Setter Property="Text" Value="&#xE70D;"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBlock x:Name="LangCurrentLabel" Text="English"
                                            FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
                                            Foreground="{DynamicResource TextPrimary}"
                                            VerticalAlignment="Center"/>
                             </DockPanel>
                         </ToggleButton>
-                        <Popup x:Name="LangPopup"
-                               PlacementTarget="{Binding ElementName=LangMenuButton}"
-                               Placement="Right"
-                               StaysOpen="False"
-                               AllowsTransparency="True"
-                               IsOpen="{Binding IsChecked, ElementName=LangMenuButton, Mode=TwoWay}">
-                            <Border Background="{DynamicResource BgModal}"
-                                    BorderBrush="{DynamicResource AccentBorder}"
-                                    BorderThickness="1" CornerRadius="4"
-                                    Padding="12,10" Margin="6,0,6,6" MinWidth="140">
-                                <Border.Effect>
-                                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="2" Opacity="0.5"/>
-                                </Border.Effect>
-                                <Grid>
-                                <Border CornerRadius="4" Margin="-12,-10,-12,-10" IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
-                                <StackPanel>
-                                    <!-- Each row: native name (autonym) on the left, dim locale-file
-                                         code on the right. MinWidth keeps the codes aligned in a column. -->
+                        </Grid>
+                        <!-- Language options expand inline below the row (accordion). -->
+                        <StackPanel x:Name="LangSubmenu" Visibility="Collapsed" Margin="10,2,0,6">
                                     <RadioButton x:Name="LangEnRadio" GroupName="LangGroup" Style="{StaticResource ThemeRadio}"
                                                  Checked="LangEnRadio_Checked">
-                                        <Grid MinWidth="150">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1521,7 +1561,7 @@
                                     </RadioButton>
                                     <RadioButton x:Name="LangEsRadio" GroupName="LangGroup" Style="{StaticResource ThemeRadio}"
                                                  Checked="LangEsRadio_Checked">
-                                        <Grid MinWidth="150">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1534,7 +1574,7 @@
                                     </RadioButton>
                                     <RadioButton x:Name="LangZhTWRadio" GroupName="LangGroup" Style="{StaticResource ThemeRadio}"
                                                  Checked="LangZhTWRadio_Checked">
-                                        <Grid MinWidth="150">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1547,7 +1587,7 @@
                                     </RadioButton>
                                     <RadioButton x:Name="LangZhCNRadio" GroupName="LangGroup" Style="{StaticResource ThemeRadio}"
                                                  Checked="LangZhCNRadio_Checked">
-                                        <Grid MinWidth="150">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1560,7 +1600,7 @@
                                     </RadioButton>
                                     <RadioButton x:Name="LangBnRadio" GroupName="LangGroup" Style="{StaticResource ThemeRadio}"
                                                  Checked="LangBnRadio_Checked">
-                                        <Grid MinWidth="150">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1573,7 +1613,7 @@
                                     </RadioButton>
                                     <RadioButton x:Name="LangTrRadio" GroupName="LangGroup" Style="{StaticResource ThemeRadio}"
                                                  Checked="LangTrRadio_Checked">
-                                        <Grid MinWidth="150">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
@@ -1584,11 +1624,7 @@
                                                        Foreground="{DynamicResource TextSecondary}"/>
                                         </Grid>
                                     </RadioButton>
-                                </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Popup>
-                    </Grid>
+                        </StackPanel>
                     <TextBlock Text="{DynamicResource Str_Theme}" Foreground="{DynamicResource HeaderAccent}"
                                FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
                                Margin="0,12,0,8"/>
@@ -1596,6 +1632,7 @@
                          so the Settings panel stays compact as more themes are added. -->
                     <Grid Margin="0,0,0,4">
                         <ToggleButton x:Name="ThemeMenuButton"
+                                      Checked="SettingsMenu_Toggled" Unchecked="SettingsMenu_Toggled"
                                       Cursor="Hand" FocusVisualStyle="{x:Null}"
                                       HorizontalAlignment="Stretch"
                                       HorizontalContentAlignment="Stretch">
@@ -1615,32 +1652,30 @@
                                 </ControlTemplate>
                             </ToggleButton.Template>
                             <DockPanel LastChildFill="True">
-                                <TextBlock DockPanel.Dock="Right" Text="&#xE76C;"
+                                <TextBlock DockPanel.Dock="Right"
                                            FontFamily="Segoe MDL2 Assets" FontSize="10"
                                            VerticalAlignment="Center" Margin="6,0,0,0"
-                                           Foreground="{DynamicResource TextSecondary}"/>
+                                           Foreground="{DynamicResource TextSecondary}">
+                                    <!-- Up chevron when the section is collapsed, down when expanded. -->
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="&#xE70E;"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsChecked, RelativeSource={RelativeSource AncestorType=ToggleButton}}" Value="True">
+                                                    <Setter Property="Text" Value="&#xE70D;"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBlock x:Name="ThemeCurrentLabel" Text="Dark"
                                            FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
                                            Foreground="{DynamicResource TextPrimary}"
                                            VerticalAlignment="Center"/>
                             </DockPanel>
                         </ToggleButton>
-                        <Popup x:Name="ThemePopup"
-                               PlacementTarget="{Binding ElementName=ThemeMenuButton}"
-                               Placement="Right"
-                               StaysOpen="False"
-                               AllowsTransparency="True"
-                               IsOpen="{Binding IsChecked, ElementName=ThemeMenuButton, Mode=TwoWay}">
-                            <Border Background="{DynamicResource BgModal}"
-                                    BorderBrush="{DynamicResource AccentBorder}"
-                                    BorderThickness="1" CornerRadius="4"
-                                    Padding="12,10" Margin="6,0,6,6" MinWidth="140">
-                                <Border.Effect>
-                                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="2" Opacity="0.5"/>
-                                </Border.Effect>
-                                <Grid>
-                                <Border CornerRadius="4" Margin="-12,-10,-12,-10" IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
-                                <StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="ThemeSubmenu" Visibility="Collapsed" Margin="10,2,0,6">
                                     <RadioButton x:Name="ThemeDarkRadio"
                                                  Content="{DynamicResource Str_Theme_Dark}"
                                                  GroupName="ThemeGroup"
@@ -1671,17 +1706,14 @@
                                                  GroupName="ThemeGroup"
                                                  Style="{StaticResource ThemeRadio}"
                                                  Checked="ThemeCyanoticRadio_Checked"/>
-                                </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Popup>
-                    </Grid>
+                        </StackPanel>
                     <TextBlock Text="{DynamicResource Str_Toolbar}" Foreground="{DynamicResource HeaderAccent}"
                                FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
                                Margin="0,12,0,8"/>
                     <!-- Toolbar style picker: a flyout submenu mirroring Theme/Language. -->
                     <Grid Margin="0,0,0,4">
                         <ToggleButton x:Name="ToolbarMenuButton"
+                                      Checked="SettingsMenu_Toggled" Unchecked="SettingsMenu_Toggled"
                                       Cursor="Hand" FocusVisualStyle="{x:Null}"
                                       HorizontalAlignment="Stretch"
                                       HorizontalContentAlignment="Stretch">
@@ -1701,32 +1733,30 @@
                                 </ControlTemplate>
                             </ToggleButton.Template>
                             <DockPanel LastChildFill="True">
-                                <TextBlock DockPanel.Dock="Right" Text="&#xE76C;"
+                                <TextBlock DockPanel.Dock="Right"
                                            FontFamily="Segoe MDL2 Assets" FontSize="10"
                                            VerticalAlignment="Center" Margin="6,0,0,0"
-                                           Foreground="{DynamicResource TextSecondary}"/>
+                                           Foreground="{DynamicResource TextSecondary}">
+                                    <!-- Up chevron when the section is collapsed, down when expanded. -->
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="&#xE70E;"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsChecked, RelativeSource={RelativeSource AncestorType=ToggleButton}}" Value="True">
+                                                    <Setter Property="Text" Value="&#xE70D;"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBlock x:Name="ToolbarCurrentLabel" Text="Text beside icons"
                                            FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
                                            Foreground="{DynamicResource TextPrimary}"
                                            VerticalAlignment="Center"/>
                             </DockPanel>
                         </ToggleButton>
-                        <Popup x:Name="ToolbarPopup"
-                               PlacementTarget="{Binding ElementName=ToolbarMenuButton}"
-                               Placement="Right"
-                               StaysOpen="False"
-                               AllowsTransparency="True"
-                               IsOpen="{Binding IsChecked, ElementName=ToolbarMenuButton, Mode=TwoWay}">
-                            <Border Background="{DynamicResource BgModal}"
-                                    BorderBrush="{DynamicResource AccentBorder}"
-                                    BorderThickness="1" CornerRadius="4"
-                                    Padding="12,10" Margin="6,0,6,6" MinWidth="140">
-                                <Border.Effect>
-                                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="2" Opacity="0.5"/>
-                                </Border.Effect>
-                                <Grid>
-                                <Border CornerRadius="4" Margin="-12,-10,-12,-10" IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
-                                <StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="ToolbarSubmenu" Visibility="Collapsed" Margin="10,2,0,6">
                                     <RadioButton x:Name="ToolbarSmallRadio"
                                                  Content="{DynamicResource Str_Toolbar_SmallIcons}"
                                                  GroupName="ToolbarGroup"
@@ -1752,11 +1782,7 @@
                                                  GroupName="ToolbarGroup"
                                                  Style="{StaticResource ThemeRadio}"
                                                  Checked="ToolbarOnlyRadio_Checked"/>
-                                </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Popup>
-                    </Grid>
+                        </StackPanel>
                     <TextBlock Text="{DynamicResource Str_ViewMode}" Foreground="{DynamicResource HeaderAccent}"
                                FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
                                Margin="0,12,0,8"/>
@@ -1764,6 +1790,7 @@
                          Stays open on selection so the user can try view modes back to back. -->
                     <Grid Margin="0,0,0,4">
                         <ToggleButton x:Name="ViewMenuButton"
+                                      Checked="SettingsMenu_Toggled" Unchecked="SettingsMenu_Toggled"
                                       Cursor="Hand" FocusVisualStyle="{x:Null}"
                                       HorizontalAlignment="Stretch"
                                       HorizontalContentAlignment="Stretch">
@@ -1783,32 +1810,30 @@
                                 </ControlTemplate>
                             </ToggleButton.Template>
                             <DockPanel LastChildFill="True">
-                                <TextBlock DockPanel.Dock="Right" Text="&#xE76C;"
+                                <TextBlock DockPanel.Dock="Right"
                                            FontFamily="Segoe MDL2 Assets" FontSize="10"
                                            VerticalAlignment="Center" Margin="6,0,0,0"
-                                           Foreground="{DynamicResource TextSecondary}"/>
+                                           Foreground="{DynamicResource TextSecondary}">
+                                    <!-- Up chevron when the section is collapsed, down when expanded. -->
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="&#xE70E;"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsChecked, RelativeSource={RelativeSource AncestorType=ToggleButton}}" Value="True">
+                                                    <Setter Property="Text" Value="&#xE70D;"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBlock x:Name="ViewCurrentLabel" Text="Continuous"
                                            FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
                                            Foreground="{DynamicResource TextPrimary}"
                                            VerticalAlignment="Center"/>
                             </DockPanel>
                         </ToggleButton>
-                        <Popup x:Name="ViewPopup"
-                               PlacementTarget="{Binding ElementName=ViewMenuButton}"
-                               Placement="Right"
-                               StaysOpen="False"
-                               AllowsTransparency="True"
-                               IsOpen="{Binding IsChecked, ElementName=ViewMenuButton, Mode=TwoWay}">
-                            <Border Background="{DynamicResource BgModal}"
-                                    BorderBrush="{DynamicResource AccentBorder}"
-                                    BorderThickness="1" CornerRadius="4"
-                                    Padding="12,10" Margin="6,0,6,6" MinWidth="140">
-                                <Border.Effect>
-                                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="2" Opacity="0.5"/>
-                                </Border.Effect>
-                                <Grid>
-                                <Border CornerRadius="4" Margin="-12,-10,-12,-10" IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
-                                <StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="ViewSubmenu" Visibility="Collapsed" Margin="10,2,0,6">
                                     <RadioButton x:Name="ViewContinuousRadio"
                                                  Content="{DynamicResource Str_View_Continuous}"
                                                  GroupName="ViewGroup"
@@ -1829,11 +1854,7 @@
                                                  GroupName="ViewGroup"
                                                  Style="{StaticResource ThemeRadio}"
                                                  Checked="ViewGridRadio_Checked"/>
-                                </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Popup>
-                    </Grid>
+                        </StackPanel>
                 </StackPanel>
                 </Grid>
                 </Border>

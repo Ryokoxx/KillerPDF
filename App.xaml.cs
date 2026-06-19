@@ -597,6 +597,16 @@ namespace KillerPDF
 
         internal static void ClearRecentFiles() => RemoveSetting("RecentFiles");
 
+        // Drops a single entry from the recent-files list (used by the per-row remove button).
+        internal static void RemoveRecentFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            var list = GetRecentFiles();
+            list.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            if (list.Count == 0) RemoveSetting("RecentFiles");
+            else SetSetting("RecentFiles", string.Join("|", list));
+        }
+
         private static bool IsInstalled()
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\KillerPDF");

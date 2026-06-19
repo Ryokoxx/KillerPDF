@@ -265,6 +265,7 @@ Bu işlem uygulamayı %LocalAppData%\KillerPDF konumuna kopyalar ve bir Başlat 
     <sys:String x:Key="Str_Menu_SaveNothing">Kaydedilecek bir şey yok</sys:String>
     <sys:String x:Key="Str_Menu_RecentNone">Son dosya yok</sys:String>
     <sys:String x:Key="Str_Menu_ClearList">Listeyi temizle</sys:String>
+    <sys:String x:Key="Str_Menu_RemoveFromRecents">Son kullanılanlardan kaldır</sys:String>
     <sys:String x:Key="Str_Sig_Title">İmzalar</sys:String>
     <sys:String x:Key="Str_Sig_None">Kayıtlı imza yok</sys:String>
     <sys:String x:Key="Str_Sig_Create">İmza Oluştur</sys:String>

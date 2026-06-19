@@ -6,7 +6,7 @@
     <!-- KillerTools light theme -->
     <SolidColorBrush x:Key="BgDark"         Color="#f0f0f0" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgPanel"        Color="#e8e8e8" po:Freeze="True"/>
-    <SolidColorBrush x:Key="BgHover"        Color="#c4c4c4" po:Freeze="True"/>
+    <SolidColorBrush x:Key="BgHover"        Color="#b2b2b2" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgSidebar"      Color="#dcdcdc" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgRecentPanel"  Color="#d4d4d4" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgFlyout"       Color="#cacaca" po:Freeze="True"/>

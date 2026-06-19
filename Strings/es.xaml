@@ -265,6 +265,7 @@ Puede desinstalarla en cualquier momento desde Agregar o quitar programas.</sys:
     <sys:String x:Key="Str_Menu_SaveNothing">Nada que guardar</sys:String>
     <sys:String x:Key="Str_Menu_RecentNone">No hay archivos recientes</sys:String>
     <sys:String x:Key="Str_Menu_ClearList">Borrar lista</sys:String>
+    <sys:String x:Key="Str_Menu_RemoveFromRecents">Quitar de recientes</sys:String>
     <sys:String x:Key="Str_Sig_Title">Firmas</sys:String>
     <sys:String x:Key="Str_Sig_None">No hay firmas guardadas</sys:String>
     <sys:String x:Key="Str_Sig_Create">Crear firma</sys:String>
