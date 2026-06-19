@@ -297,7 +297,11 @@ namespace KillerPDF
         // preview and the print path so what you see is what prints.
         private Grid ComposeSheet(System.Collections.Generic.List<int> idxs, double aw, double ah)
         {
-            var sheet = new Grid { Width = aw, Height = ah, Background = Brushes.White, ClipToBounds = true };
+            var sheet = new Grid
+            {
+                Width = aw, Height = ah, Background = Brushes.White, ClipToBounds = true,
+                UseLayoutRounding = true, SnapsToDevicePixels = true
+            };
             var canvas = new Canvas();
             double m = _marginPx;
 

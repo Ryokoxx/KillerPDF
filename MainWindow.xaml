@@ -1121,6 +1121,9 @@
                                                        FontFamily="Consolas" FontSize="18"
                                                        HorizontalAlignment="Center"
                                                        VerticalAlignment="Center">
+                                                <TextBlock.Effect>
+                                                    <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="2" Direction="270" Opacity="{DynamicResource IconShadowOpacity}"/>
+                                                </TextBlock.Effect>
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Style.Triggers>
@@ -1149,6 +1152,9 @@
                                                        FontSize="16"
                                                        HorizontalAlignment="Center"
                                                        VerticalAlignment="Center">
+                                                <TextBlock.Effect>
+                                                    <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="2" Direction="270" Opacity="{DynamicResource IconShadowOpacity}"/>
+                                                </TextBlock.Effect>
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Style.Triggers>
@@ -1236,7 +1242,7 @@
                             </Grid.ColumnDefinitions>
 
                             <!-- Drop target, centered in the remaining space -->
-                            <Border Grid.Column="0" BorderBrush="{DynamicResource TextSecondary}" BorderThickness="2"
+                            <Border Grid.Column="0" BorderBrush="{DynamicResource DropBorder}" BorderThickness="2"
                                     CornerRadius="8" Padding="40"
                                     HorizontalAlignment="Center" VerticalAlignment="Center"
                                     Background="Transparent" Style="{x:Null}">
@@ -1382,26 +1388,34 @@
             </Grid>
         </Border>
 
-        <!-- Settings overlay -->
+        <!-- Settings overlay. No Background, so it doesn't catch clicks - the panel is non-modal and the
+             window stays interactive while it's open (a click elsewhere is dismissed by a window-level
+             handler that lets the click through). -->
         <Grid x:Name="SettingsOverlay"
               Grid.RowSpan="4"
               Panel.ZIndex="9999"
-              Visibility="Collapsed"
-              Background="Transparent"
-              MouseLeftButtonDown="SettingsOverlay_MouseLeftButtonDown"
-              MouseRightButtonDown="SettingsOverlay_MouseLeftButtonDown"
-              PreviewMouseWheel="SettingsOverlay_PreviewMouseWheel">
-            <Grid x:Name="SettingsPanel" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="100,40,0,0" Width="180">
-                <!-- Shadow cast by a separate element so the panel text stays crisp. -->
-                <Border Background="{DynamicResource BgModal}" CornerRadius="6" IsHitTestVisible="False">
+              Visibility="Collapsed">
+            <Grid x:Name="SettingsPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="186,0,0,36" Width="160">
+                <!-- Left edge stays flush against the sidebar's right edge; the panel expands rightward
+                     out of the sidebar (its Width animates) and shrinks back into it on close. The inner
+                     borders keep a fixed width so the content doesn't reflow while the Grid is clipped. -->
+                <!-- Opaque body + shadow, using the same BgPanel + film grain as the annotate bar. No
+                     left border / left corners - that edge sits against the sidebar. -->
+                <Border Background="{DynamicResource BgFlyout}" CornerRadius="0,6,6,0" IsHitTestVisible="False"
+                        Width="160" HorizontalAlignment="Left">
                     <Border.Effect>
-                        <DropShadowEffect Color="Black" BlurRadius="16" ShadowDepth="2" Direction="270" Opacity="0.5"/>
+                        <!-- Offset right (Direction 0) with depth >= blur so the shadow falls to the
+                             right/below and never bleeds left over the sidebar. -->
+                        <DropShadowEffect Color="Black" BlurRadius="14" ShadowDepth="14" Direction="0" Opacity="0.5"/>
                     </Border.Effect>
                 </Border>
-                <Border Background="{DynamicResource BgModal}"
+                <Border Background="{DynamicResource GrainBrushShared}" Opacity="0.035"
+                        CornerRadius="0,6,6,0" Width="160" HorizontalAlignment="Left" IsHitTestVisible="False"/>
+                <Border Background="Transparent"
                         BorderBrush="{DynamicResource AccentBorder}"
-                        BorderThickness="1"
-                        CornerRadius="6"
+                        BorderThickness="0,1,1,1"
+                        CornerRadius="0,6,6,0"
+                        Width="160" HorizontalAlignment="Left"
                         Padding="20,16,20,20"
                         MouseLeftButtonDown="SettingsOverlayCard_MouseLeftButtonDown"
                         MouseRightButtonDown="SettingsOverlayCard_MouseLeftButtonDown">

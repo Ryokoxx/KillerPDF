@@ -9,6 +9,7 @@
     <SolidColorBrush x:Key="BgHover"        Color="#54201f" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgSidebar"      Color="#240c0d" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgRecentPanel"  Color="#3e191b" po:Freeze="True"/>
+    <SolidColorBrush x:Key="BgFlyout"       Color="#2e1214" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgModal"        Color="#1e0a0b" po:Freeze="True"/>
     <SolidColorBrush x:Key="BorderDim"      Color="#401d1d" po:Freeze="True"/>
     <SolidColorBrush x:Key="Accent"         Color="#ffffff" po:Freeze="True"/>
@@ -16,7 +17,8 @@
     <SolidColorBrush x:Key="SelectionAccent" Color="#cc1a2b" po:Freeze="True"/>
     <SolidColorBrush x:Key="AccentLogo"     Color="#1ea54c" po:Freeze="True"/>
     <SolidColorBrush x:Key="InstallBtnBg"   Color="#1ea54c" po:Freeze="True"/>
-    <SolidColorBrush x:Key="AccentBorder"   Color="#552a2f" po:Freeze="True"/>
+    <SolidColorBrush x:Key="AccentBorder"   Color="#4a2429" po:Freeze="True"/>
+    <SolidColorBrush x:Key="DropBorder"     Color="#39191c" po:Freeze="True"/>
     <SolidColorBrush x:Key="PaneBorder"     Color="#3a1a1d" po:Freeze="True"/>
     <SolidColorBrush x:Key="AccentDim"      Color="#44ffffff" po:Freeze="True"/>
     <SolidColorBrush x:Key="TextPrimary"    Color="#fffde8" po:Freeze="True"/>
@@ -28,10 +30,10 @@
     <SolidColorBrush x:Key="DragLine"       Color="#5a1e26" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgScrollThumb"  Color="#aaf8c99e" po:Freeze="True"/>
     <SolidColorBrush x:Key="ScrollThumbHover" Color="#fce6d2" po:Freeze="True"/>
-    <SolidColorBrush x:Key="SliderTrack"    Color="#240d0e" po:Freeze="True"/>
+    <SolidColorBrush x:Key="SliderTrack"    Color="#1b090a" po:Freeze="True"/>
     <SolidColorBrush x:Key="RadioAccent"    Color="#f8c99e" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgOverlay"      Color="#CC80000c" po:Freeze="True"/>
-    <sys:Double x:Key="GrainOpacity">0.38</sys:Double>
+    <sys:Double x:Key="GrainOpacity">0.32</sys:Double>
     <sys:Double x:Key="IconShadowOpacity">0.9</sys:Double>
 
     <SolidColorBrush x:Key="BgCanvas"                                                       Color="#4a1f20" po:Freeze="True"/>

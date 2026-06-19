@@ -241,6 +241,7 @@ namespace KillerPDF
             _pageTotalLabel = (TextBlock)FindName("PageTotalLabel")!;
             _continuousPanel = (StackPanel)FindName("ContinuousPanel")!;
             PagePreviewPanel.ScrollChanged += PagePreviewPanel_ScrollChanged;
+            PreviewMouseDown += SettingsDismiss_PreviewMouseDown;   // non-modal Settings: close on outside click
             if (Enum.TryParse<ViewMode>(App.GetSetting("ViewMode"), out var savedVm))
                 _viewMode = savedVm;
             if (Enum.TryParse<ToolbarStyle>(App.GetSetting("ToolbarStyle"), out var savedTb))
@@ -305,6 +306,8 @@ namespace KillerPDF
 
         private void SettingsBtn_Click(object sender, RoutedEventArgs e)
         {
+            // Toggle: clicking the gear while the panel is open closes it.
+            if (SettingsOverlay.Visibility == Visibility.Visible) { SlideSettingsClosed(); return; }
             // Sync radio buttons to current theme before showing
             var cur = ThemeManager.Current;
             ThemeDarkRadio.IsChecked  = cur == Theme.Dark;
@@ -336,47 +339,69 @@ namespace KillerPDF
             ToolbarUnderRadio.IsChecked  = _toolbarStyle == ToolbarStyle.TextUnder;
             ToolbarOnlyRadio.IsChecked   = _toolbarStyle == ToolbarStyle.TextOnly;
             ToolbarCurrentLabel.Text     = ToolbarStyleName(_toolbarStyle);
-            FadeOverlayIn(SettingsOverlay);
-            // Place the panel (saved drag position, or the default tucked near the gear) and make
-            // its header a drag handle. Deferred to Loaded so ActualHeight is known.
             PositionSettingsPanel();
+            SettingsOverlay.Visibility = Visibility.Visible;
+            SlideSettingsOpen();
         }
 
-        private bool _settingsDragHooked;
+        private const double SettingsPanelWidth = 160;
+
+        // Expands the panel out of the sidebar (Width grows from the flush left edge). Clipped while
+        // animating so it reveals left-to-right; clip is dropped at the end so the drop shadow shows.
+        private void SlideSettingsOpen()
+        {
+            SettingsPanel.ClipToBounds = true;
+            var anim = new DoubleAnimation(0, SettingsPanelWidth, new Duration(TimeSpan.FromMilliseconds(160)))
+            { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
+            anim.Completed += (_, _) =>
+            {
+                SettingsPanel.BeginAnimation(FrameworkElement.WidthProperty, null);
+                SettingsPanel.Width = SettingsPanelWidth;
+                SettingsPanel.ClipToBounds = false;   // reveal the right/bottom drop shadow
+            };
+            SettingsPanel.BeginAnimation(FrameworkElement.WidthProperty, anim);
+        }
+
+        // Shrinks it back into the sidebar, then hides the overlay.
+        private void SlideSettingsClosed()
+        {
+            if (SettingsOverlay.Visibility != Visibility.Visible) return;
+            SettingsPanel.ClipToBounds = true;
+            double from = SettingsPanel.ActualWidth > 0 ? SettingsPanel.ActualWidth : SettingsPanelWidth;
+            var anim = new DoubleAnimation(from, 0, new Duration(TimeSpan.FromMilliseconds(140)))
+            { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } };
+            anim.Completed += (_, _) =>
+            {
+                SettingsOverlay.Visibility = Visibility.Collapsed;
+                SettingsPanel.BeginAnimation(FrameworkElement.WidthProperty, null);
+                SettingsPanel.Width = SettingsPanelWidth;
+                SettingsPanel.ClipToBounds = false;
+            };
+            SettingsPanel.BeginAnimation(FrameworkElement.WidthProperty, anim);
+        }
+
+        // Non-modal Settings: a mouse-down anywhere outside the panel dismisses it WITHOUT swallowing the
+        // click (it still reaches its target). The title bar is excluded so dragging the window keeps the
+        // panel open; the gear is excluded so it can toggle itself closed.
+        private void SettingsDismiss_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (SettingsOverlay.Visibility != Visibility.Visible) return;
+            if (e.OriginalSource is not DependencyObject src) return;
+            if (IsDescendantOf(src, SettingsPanel)) return;
+            if (TitleBarBorder != null && IsDescendantOf(src, TitleBarBorder)) return;
+            if (SettingsBtn != null && IsDescendantOf(src, SettingsBtn)) return;
+            SlideSettingsClosed();
+        }
 
         /// <summary>
-        /// Positions the draggable Settings panel from its saved position, or defaults to the
-        /// bottom-left spot near the gear (a small left inset when the sidebar is collapsed). Also
-        /// wires up header dragging on first use. Runs after layout so sizes are known.
+        /// Pins the Settings panel's left edge flush against the sidebar's right edge (just past the
+        /// splitter), bottom-anchored above the footer. Not draggable; tracks the sidebar's collapsed
+        /// width and window resizes automatically.
         /// </summary>
         private void PositionSettingsPanel()
         {
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
-            {
-                // Force a layout pass so the panel's ActualWidth/Height are valid before clamping;
-                // otherwise a saved position could be clamped against a zero size and end up off-screen.
-                SettingsPanel.UpdateLayout();
-
-                if (int.TryParse(App.GetSetting("SettingsPanelLeft"), out int sl) &&
-                    int.TryParse(App.GetSetting("SettingsPanelTop"),  out int st))
-                {
-                    double l = sl, t = st;
-                    ClampPanelToBounds(SettingsPanel, SettingsOverlay, ref l, ref t);
-                    SettingsPanel.Margin = new Thickness(l, t, 0, 0);
-                }
-                else
-                {
-                    // Default: tucked near the gear at the bottom-left (matches the old anchor).
-                    double l = _sidebarCollapsed ? 34 : 100;
-                    double t = Math.Max(0, SettingsOverlay.ActualHeight - SettingsPanel.ActualHeight - 36);
-                    SettingsPanel.Margin = new Thickness(l, t, 0, 0);
-                }
-                if (!_settingsDragHooked)
-                {
-                    EnablePanelDrag(SettingsHeader, SettingsPanel, SettingsOverlay, "SettingsPanel");
-                    _settingsDragHooked = true;
-                }
-            }));
+            double sidebarRight = (_sidebarCol?.ActualWidth ?? 180) + 6;   // sidebar column + 6px splitter
+            SettingsPanel.Margin = new Thickness(sidebarRight, 0, 0, 36);
         }
 
         // ── Quick fade in/out for the full-window overlay panels (Settings/Shortcuts/About) ──
@@ -429,7 +454,7 @@ namespace KillerPDF
             if (bar is null) return;
             _annotBarMinimized = !_annotBarMinimized;
             bar.ClipToBounds = true;
-            const double peek = 18;   // tall enough to show the grip dots with the bar's padding
+            const double peek = 13;   // thin strip, just enough for the grip dots
             if (_annotBarMinimized)
             {
                 // Freeze the current width so collapsing the content can't shrink the bar to the dots and
@@ -468,7 +493,7 @@ namespace KillerPDF
         }
 
         private void SettingsOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-            => FadeOverlayOut(SettingsOverlay);
+            => SlideSettingsClosed();
 
         // While Settings is open the full-window overlay catches input. Let the wheel pass through to
         // the content behind it (document or sidebar under the cursor) so the user can keep reading
@@ -493,7 +518,7 @@ namespace KillerPDF
             => e.Handled = true;
 
         private void SettingsOverlayClose_Click(object sender, RoutedEventArgs e)
-            => FadeOverlayOut(SettingsOverlay);
+            => SlideSettingsClosed();
 
         private void OnThemeChanged()
         {
@@ -1136,9 +1161,7 @@ namespace KillerPDF
         {
             if (SettingsOverlay is null || SettingsPanel is null) return;
             if (SettingsOverlay.Visibility != Visibility.Visible) return;
-            double l = SettingsPanel.Margin.Left, t = SettingsPanel.Margin.Top;
-            ClampPanelToBounds(SettingsPanel, SettingsOverlay, ref l, ref t);
-            SettingsPanel.Margin = new Thickness(l, t, 0, 0);
+            PositionSettingsPanel();   // re-anchor bottom-left (handles sidebar collapse / resize)
         }
 
         // Re-applies the saved placement to every visible annotation bar. Called synchronously from the
@@ -4856,7 +4879,7 @@ namespace KillerPDF
                 IsHitTestVisible = false,
                 Visibility = Visibility.Collapsed
             };
-            var fill = TryFindResource("BgDragHandle") as Brush ?? Brushes.Gray;
+            var fill = TryFindResource("TextSecondary") as Brush ?? Brushes.Gray;   // match the sidebar handle dots
             for (int i = 0; i < 6; i++)
                 dots.Children.Add(new System.Windows.Shapes.Ellipse
                 { Width = 3, Height = 3, Margin = new Thickness(2, 0, 2, 0), Fill = fill });
@@ -5154,7 +5177,7 @@ namespace KillerPDF
                 Child = BuildBarHost(panel),
                 Margin = new Thickness(0, 0, 0, 0)
             };
-            _drawSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgPanel");
+            _drawSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgFlyout");
             _drawSettingsBar.SetResourceReference(Border.BorderBrushProperty, "PaneBorder");
 
             var previewArea = PagePreviewPanel.Parent as Grid;
@@ -5434,7 +5457,7 @@ namespace KillerPDF
                 Child = BuildBarHost(grid),
                 Margin = new Thickness(0, 0, 0, 0)
             };
-            _textSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgPanel");
+            _textSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgFlyout");
             _textSettingsBar.SetResourceReference(Border.BorderBrushProperty, "PaneBorder");
 
             var previewArea = PagePreviewPanel.Parent as Grid;
@@ -8541,7 +8564,7 @@ namespace KillerPDF
             }
             else if (e.Key == Key.Escape && SettingsOverlay.Visibility == Visibility.Visible)
             {
-                FadeOverlayOut(SettingsOverlay);
+                SlideSettingsClosed();
                 e.Handled = true;
             }
             else if (e.Key == Key.Escape && _searchBar is not null && _searchBar.Visibility == Visibility.Visible)

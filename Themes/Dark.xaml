@@ -9,6 +9,7 @@
     <SolidColorBrush x:Key="BgHover"        Color="#404040" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgSidebar"      Color="#1c1c1c" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgRecentPanel"  Color="#2f2f2f" po:Freeze="True"/>
+    <SolidColorBrush x:Key="BgFlyout"       Color="#262626" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgModal"        Color="#1e1e1e" po:Freeze="True"/>
     <SolidColorBrush x:Key="BorderDim"      Color="#2e2e2e" po:Freeze="True"/>
     <SolidColorBrush x:Key="Accent"         Color="#1ea54c" po:Freeze="True"/>
@@ -17,6 +18,7 @@
     <SolidColorBrush x:Key="AccentLogo"     Color="#1ea54c" po:Freeze="True"/>
     <SolidColorBrush x:Key="InstallBtnBg"   Color="#1ea54c" po:Freeze="True"/>
     <SolidColorBrush x:Key="AccentBorder"   Color="#404040" po:Freeze="True"/>
+    <SolidColorBrush x:Key="DropBorder"     Color="#303030" po:Freeze="True"/>
     <SolidColorBrush x:Key="PaneBorder"     Color="#404040" po:Freeze="True"/>
     <SolidColorBrush x:Key="AccentDim"      Color="#0d2a18" po:Freeze="True"/>
     <SolidColorBrush x:Key="TextPrimary"    Color="#e0e0e0" po:Freeze="True"/>
@@ -28,10 +30,10 @@
     <SolidColorBrush x:Key="DragLine"       Color="#505050" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgScrollThumb"  Color="#551ea54c" po:Freeze="True"/>
     <SolidColorBrush x:Key="ScrollThumbHover" Color="#1ea54c" po:Freeze="True"/>
-    <SolidColorBrush x:Key="SliderTrack"    Color="#262626" po:Freeze="True"/>
+    <SolidColorBrush x:Key="SliderTrack"    Color="#505050" po:Freeze="True"/>
     <SolidColorBrush x:Key="RadioAccent"    Color="#1ea54c" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgOverlay"      Color="#BB000000" po:Freeze="True"/>
-    <sys:Double x:Key="GrainOpacity">0.30</sys:Double>
+    <sys:Double x:Key="GrainOpacity">0.26</sys:Double>
     <sys:Double x:Key="IconShadowOpacity">0.9</sys:Double>
 
     <SolidColorBrush x:Key="BgCanvas"                                                       Color="#3a3a3a" po:Freeze="True"/>
