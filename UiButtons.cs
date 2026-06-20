@@ -20,9 +20,17 @@ namespace KillerPDF
         public static Button Make(object content, bool accent)
         {
             return accent
-                ? Make(content, R("AccentDim"), R("Accent"),     R("Accent"),      R("BgModal"),     R("Accent"))
+                ? Make(content, R("AccentDim"), R("Accent"),     R("Accent"),      AccentHoverFg(),  R("Accent"))
                 : Make(content, R("BgPanel"),   R("BgHover"),    R("TextPrimary"), R("TextPrimary"), R("BorderDim"));
         }
+
+        // Foreground for an accent button when hovered (solid-accent fill). White reads better than
+        // the near-black BgModal on the bright accents of the Dark/Black themes; Light and the RGB
+        // themes keep BgModal (their accent + modal pairing already reads well).
+        private static Brush AccentHoverFg()
+            => Services.ThemeManager.Current is Services.Theme.Dark or Services.Theme.Black
+                ? System.Windows.Media.Brushes.White
+                : R("BgModal");
 
         // Explicit-colour entry point for self-contained windows that run before the theme is
         // loaded or on the failure path (the startup launcher, the crash dialog, the About box).

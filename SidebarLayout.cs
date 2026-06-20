@@ -64,10 +64,35 @@ namespace KillerPDF
                 Grid.SetColumn(sbContent, 1);
             }
 
-            // The splitter's 1px divider line faces the document: on its right for a left
-            // sidebar, on its left for a right sidebar.
+            // The splitter's 1px divider line faces the SIDEBAR (opposite the document), sitting right
+            // beside the elevation shadow: on its left for a left sidebar, on its right for a right one.
             if (FindName("SidebarSplitter") is GridSplitter splitter)
-                splitter.BorderThickness = _sidebarRight ? new Thickness(1, 0, 0, 0) : new Thickness(0, 0, 1, 0);
+                splitter.BorderThickness = _sidebarRight ? new Thickness(0, 0, 1, 0) : new Thickness(1, 0, 0, 0);
+
+            // Elevation shadow pokes out of the toggle strip onto the page list, away from the
+            // document, on whichever side the sidebar sits.
+            if (FindName("SidebarShadow") is Border sbShadow)
+            {
+                sbShadow.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+                if (_sidebarRight)
+                {   // strip faces left (document on the left): dark at left, poke right into the list
+                    sbShadow.HorizontalAlignment = System.Windows.HorizontalAlignment.Right;
+                    sbShadow.Margin = new System.Windows.Thickness(0, 0, -12, 0);
+                    sbShadow.RenderTransform = null;
+                }
+                else
+                {   // strip faces right (document on the right): dark at right, poke left into the list
+                    sbShadow.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
+                    sbShadow.Margin = new System.Windows.Thickness(-12, 0, 0, 0);
+                    sbShadow.RenderTransform = new System.Windows.Media.ScaleTransform(-1, 1);
+                }
+            }
+
+            // Top/bottom accent lines span the splitter + document columns (never the sidebar):
+            // col 1-2 for a left sidebar (doc in col 2), col 0-1 for a right sidebar (doc in col 0).
+            int accentStartCol = _sidebarRight ? 0 : 1;
+            foreach (var n in new[] { "DocTopAccent", "DocBottomAccent" })
+                if (FindName(n) is Border accentLine) System.Windows.Controls.Grid.SetColumn(accentLine, accentStartCol);
 
             UpdateSidebarToggleGlyph();
             ApplySettingsPanelSide();

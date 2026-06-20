@@ -110,6 +110,10 @@ namespace KillerPDF
         private double _resizeSigStartScale;
         private PlacedAnnotation? _resizeSigAnnot;
         private TextAnnotation? _resizeTextAnnot;               // text box being width-resized (height auto-fits)
+        private HighlightAnnotation? _resizeHlAnnot;            // highlight/line being corner-resized (Bounds)
+        private InkAnnotation? _resizeInkAnnot;                 // ink stroke being corner-resized (points scaled)
+        private List<Point>? _resizeInkOrigPoints;             // snapshot of ink points at resize start
+        private Rect _resizeInkOrigBounds;                      // ink bounding box at resize start
         private readonly List<Rectangle> _resizeHandles = [];   // 4 corner handles for placed annotations
         private string _resizeCorner = "SE";                    // which corner is being dragged
         private Point _resizeAnchor;                            // opposite corner, held fixed during resize
@@ -344,7 +348,7 @@ namespace KillerPDF
             var cur = ThemeManager.Current;
             ThemeDarkRadio.IsChecked  = cur == Theme.Dark;
             ThemeLightRadio.IsChecked = cur == Theme.Light;
-            ThemeHCRadio.IsChecked    = cur == Theme.HighContrast;
+            ThemeHCRadio.IsChecked    = cur == Theme.Black;
             ThemeBloodRadio.IsChecked = cur == Theme.Blood;
             ThemeGreedRadio.IsChecked    = cur == Theme.Greed;
             ThemeCyanoticRadio.IsChecked = cur == Theme.Cyanotic;
@@ -604,7 +608,7 @@ namespace KillerPDF
 
         private void ThemeDarkRadio_Checked(object sender, RoutedEventArgs e)     => SelectTheme(Theme.Dark);
         private void ThemeLightRadio_Checked(object sender, RoutedEventArgs e)    => SelectTheme(Theme.Light);
-        private void ThemeHCRadio_Checked(object sender, RoutedEventArgs e)       => SelectTheme(Theme.HighContrast);
+        private void ThemeHCRadio_Checked(object sender, RoutedEventArgs e)       => SelectTheme(Theme.Black);
         private void ThemeBloodRadio_Checked(object sender, RoutedEventArgs e)    => SelectTheme(Theme.Blood);
         private void ThemeGreedRadio_Checked(object sender, RoutedEventArgs e)    => SelectTheme(Theme.Greed);
         private void ThemeCyanoticRadio_Checked(object sender, RoutedEventArgs e) => SelectTheme(Theme.Cyanotic);
@@ -624,7 +628,7 @@ namespace KillerPDF
         // the picker slides to the selected theme while the total menu height stays fixed.
         private void AccentDot_Click(object sender, MouseButtonEventArgs e)      => HandleAccentDot(sender, Theme.Dark);
         private void AccentDotLight_Click(object sender, MouseButtonEventArgs e) => HandleAccentDot(sender, Theme.Light);
-        private void AccentDotBlack_Click(object sender, MouseButtonEventArgs e) => HandleAccentDot(sender, Theme.HighContrast);
+        private void AccentDotBlack_Click(object sender, MouseButtonEventArgs e) => HandleAccentDot(sender, Theme.Black);
 
         private void HandleAccentDot(object sender, Theme family)
         {
@@ -647,9 +651,9 @@ namespace KillerPDF
                     dot.BorderBrush = sel ? ring : System.Windows.Media.Brushes.Transparent;
                 }
             }
-            RingRow(new[] { AccentDotRed, AccentDotOrange, AccentDotGreen, AccentDotTeal, AccentDotBlue, AccentDotPurple }, ThemeManager.DarkAccentChoice);
-            RingRow(new[] { AccentDotLightRed, AccentDotLightOrange, AccentDotLightGreen, AccentDotLightTeal, AccentDotLightBlue, AccentDotLightPurple }, ThemeManager.LightAccentChoice);
-            RingRow(new[] { AccentDotBlackRed, AccentDotBlackOrange, AccentDotBlackGreen, AccentDotBlackTeal, AccentDotBlackBlue, AccentDotBlackPurple }, ThemeManager.BlackAccentChoice);
+            RingRow([AccentDotRed, AccentDotOrange, AccentDotGreen, AccentDotTeal, AccentDotBlue, AccentDotPurple], ThemeManager.DarkAccentChoice);
+            RingRow([AccentDotLightRed, AccentDotLightOrange, AccentDotLightGreen, AccentDotLightTeal, AccentDotLightBlue, AccentDotLightPurple], ThemeManager.LightAccentChoice);
+            RingRow([AccentDotBlackRed, AccentDotBlackOrange, AccentDotBlackGreen, AccentDotBlackTeal, AccentDotBlackBlue, AccentDotBlackPurple], ThemeManager.BlackAccentChoice);
         }
 
         // Slide the picker to the active theme. Each row animates its height; because the outgoing row
@@ -660,7 +664,7 @@ namespace KillerPDF
             var cur = ThemeManager.Current;
             SlideRow(DarkAccentRow,  cur == Theme.Dark,         animate);
             SlideRow(LightAccentRow, cur == Theme.Light,        animate);
-            SlideRow(BlackAccentRow, cur == Theme.HighContrast, animate);
+            SlideRow(BlackAccentRow, cur == Theme.Black, animate);
         }
 
         private const double AccentRowHeight = 26;   // 18px swatch + 8px breathing room
@@ -700,7 +704,7 @@ namespace KillerPDF
         private string ThemeDisplayName(Theme t) => t switch
         {
             Theme.Light        => Loc("Str_Theme_Light"),
-            Theme.HighContrast => Loc("Str_Theme_HighContrast"),
+            Theme.Black        => Loc("Str_Theme_Black"),
             Theme.Blood        => Loc("Str_Theme_Blood"),
             Theme.Greed        => Loc("Str_Theme_Greed"),
             Theme.Cyanotic     => Loc("Str_Theme_Cyanotic"),
@@ -1340,22 +1344,30 @@ namespace KillerPDF
         {
             double w = bar.ActualWidth;
             if (w <= 0) return;
+            // The document's vertical scrollbar lives on the right edge of the area. Keep the bar clear
+            // of it when it's showing; when it isn't, the bar can use the full edge.
+            double sb = VerticalScrollBarInset();
             double maxLeft = Math.Max(0, area.ActualWidth - w);
             if (_annotBarCenterFrac is double frac)
             {
                 // Parked away from both edges: keep the same fraction of the width so it scales smoothly
-                // with the window instead of lurching toward an edge.
-                double left = Math.Max(0, Math.Min(maxLeft, frac * area.ActualWidth - w / 2));
+                // with the window instead of lurching toward an edge. Clamp so it never slides under the
+                // scrollbar on the right.
+                double maxLeftCentered = Math.Max(0, maxLeft - sb);
+                double left = Math.Max(0, Math.Min(maxLeftCentered, frac * area.ActualWidth - w / 2));
                 bar.HorizontalAlignment = HorizontalAlignment.Left;
                 bar.Margin = new Thickness(left, bar.Margin.Top, 0, 0);
                 SetBarDockedBorder(bar, dockedLeft: false, dockedRight: false);
             }
             else if (_annotBarAnchorRight)
             {
-                double g = Math.Min(maxLeft, _annotBarGap ?? 8);
+                // Sit the bar against the scrollbar's left edge when it's present (gap + scrollbar width),
+                // otherwise honour the plain gap right up to the pane edge.
+                double g = Math.Min(maxLeft, (_annotBarGap ?? 8) + sb);
                 bar.HorizontalAlignment = HorizontalAlignment.Right;
                 bar.Margin = new Thickness(0, bar.Margin.Top, g, 0);
-                SetBarDockedBorder(bar, dockedLeft: false, dockedRight: g <= 0.5);
+                // Only merge with the pane's edge line when nothing (no scrollbar) sits between them.
+                SetBarDockedBorder(bar, dockedLeft: false, dockedRight: sb <= 0 && g <= 0.5);
             }
             else
             {
@@ -1365,6 +1377,13 @@ namespace KillerPDF
                 SetBarDockedBorder(bar, dockedLeft: g <= 0.5, dockedRight: false);
             }
         }
+
+        // Width reserved by the document pane's vertical scrollbar (matches the ScrollBar style's fixed
+        // 12px in MainWindow.xaml). Zero when the scrollbar isn't currently shown, so a docked bar can
+        // reach the pane edge; otherwise the bar stops at the scrollbar's left edge.
+        private const double DocScrollBarWidth = 12;
+        private double VerticalScrollBarInset() =>
+            PagePreviewPanel?.ComputedVerticalScrollBarVisibility == Visibility.Visible ? DocScrollBarWidth : 0;
 
         // When the bar is docked flush against a side, drop its own 1px border on that side and swap it
         // for 1px of padding. The document pane's border (same brush) then serves as the single shared
@@ -3845,8 +3864,25 @@ namespace KillerPDF
                 Canvas.SetTop(lo, lnk.Cy);
 
                 var capturedTag = lnk.Tag;
-                lo.PreviewMouseLeftButtonDown += (_, args) =>
+                lo.PreviewMouseLeftButtonDown += (_snd, args) =>
                 {
+                    // Links only follow with the Select tool, and never when the click is on an
+                    // annotation. Otherwise forward to the page overlay so tools/selection work over a
+                    // link region instead of the link eating the click (those orphan-scan PDFs embed a
+                    // page-spanning site link).
+                    var annCanvas = _continuousCanvases.TryGetValue(pageIndex, out var ac) ? ac : null;
+                    bool follow = _currentTool == EditTool.Select;
+                    if (follow && annCanvas is not null)
+                    {
+                        var pt = args.GetPosition(annCanvas);
+                        if (_annotations.TryGetValue(pageIndex, out var al) && al.Any(a => HitTestAnnotation(a, pt, out _)))
+                            follow = false;
+                    }
+                    if (!follow)
+                    {
+                        if (annCanvas is not null) Canvas_MouseLeftButtonDown(annCanvas, args);
+                        return;
+                    }
                     if (capturedTag is int tp)
                         PageList.SelectedIndex = tp;
                     else if (capturedTag is string u)
@@ -5038,19 +5074,20 @@ namespace KillerPDF
         // left/right along the top of the document. Returns the handle for EnableBarSlide.
         private Border MakeBarGrip()
         {
+            // Real ellipse dots (not a braille glyph, which didn't render on some fonts/themes - the
+            // grip looked empty on the Light bars). Matches the sidebar splitter / minimized-bar dots.
+            var dots = new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Center };
+            var fill = (Brush)FindResource("TextSecondary");
+            for (int i = 0; i < 3; i++)
+                dots.Children.Add(new System.Windows.Shapes.Ellipse
+                { Width = 3, Height = 3, Margin = new Thickness(0, 1.5, 0, 1.5), Fill = fill });
             return new Border
             {
                 Background        = Brushes.Transparent,
                 Cursor            = Cursors.Hand,
                 Padding           = new Thickness(2, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Child = new TextBlock
-                {
-                    Text              = "⠇",   // vertical dots, a drag grip
-                    FontSize          = 14,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Foreground        = (SolidColorBrush)FindResource("TextSecondary")
-                }
+                Child             = dots
             };
         }
 
@@ -5095,7 +5132,7 @@ namespace KillerPDF
         // sides and bottom but never above the bar (no halo between it and the toolbar). Removed entirely
         // while minimized.
         private static System.Windows.Media.Effects.DropShadowEffect AnnotBarShadow()
-            => new() { Color = Colors.Black, BlurRadius = 8, ShadowDepth = 8, Direction = 270, Opacity = 0.5 };
+            => new() { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 3, Direction = 270, Opacity = 0.38 };
 
         // Lets the annotation bars slide horizontally along the top via their grip, clamped inside
         // the document area, with the X position remembered (shared across the draw/text bars).
@@ -5119,12 +5156,16 @@ namespace KillerPDF
             {
                 if (bar.Tag is not (double startX, double origLeft) || !grip.IsMouseCaptured) return;
                 double w = bar.ActualWidth;
-                double maxLeft = Math.Max(0, bounds.ActualWidth - w);
+                // Stop the drag at the scrollbar's left edge (not the pane edge) so the bar never
+                // overshoots the scrollbar and then snaps back on release - the "bounce" the user saw.
+                double sb = VerticalScrollBarInset();
+                double maxLeft = Math.Max(0, bounds.ActualWidth - w - sb);
                 double nl = Math.Max(0, Math.Min(maxLeft, origLeft + (e.GetPosition(bounds).X - startX)));
                 bar.Margin = new Thickness(nl, bar.Margin.Top, 0, 0);
                 // Merge the docked-side border with the pane border live while dragging (no footprint
-                // change), so it doesn't pop in on release.
-                SetBarDockedBorder(bar, dockedLeft: nl <= 0.5, dockedRight: nl >= maxLeft - 0.5);
+                // change), so it doesn't pop in on release. The right side only docks flush when no
+                // scrollbar sits between the bar and the pane edge.
+                SetBarDockedBorder(bar, dockedLeft: nl <= 0.5, dockedRight: sb <= 0 && nl >= maxLeft - 0.5);
             };
             grip.MouseLeftButtonUp += (s, e) =>
             {
@@ -5132,7 +5173,11 @@ namespace KillerPDF
                 grip.ReleaseMouseCapture();
                 double w = bar.ActualWidth;
                 double left = bar.Margin.Left;
-                double rightGap = Math.Max(0, bounds.ActualWidth - (left + w));
+                // Measure the right gap from the scrollbar's left edge (the usable content edge), so a
+                // bar parked against the scrollbar records gap ~0 and PositionAnnotationBar re-adds the
+                // scrollbar width once - no double inset, no jump.
+                double sb = VerticalScrollBarInset();
+                double rightGap = Math.Max(0, (bounds.ActualWidth - sb) - (left + w));
                 const double snap = 24;   // within this many px of an edge, cling to that edge exactly
                 if (left <= snap)
                 {
@@ -5165,6 +5210,7 @@ namespace KillerPDF
         private double? _annotBarGap;
         private bool _annotBarAnchorRight = true;
         private double? _annotBarCenterFrac;   // set when parked away from both edges: hold this fraction of the width
+        private bool _vScrollVisible;          // last-known document vertical scrollbar state, to reposition bars on change
         private EditTool? _annotBarTool;       // which tool the visible annotate bar is for (so we fade only on real switches)
         private bool _annotBarMinimized;       // annotate bar collapsed to a peek strip (toggled by re-clicking its tool)
         private double _annotBarFullHeight;    // remembered full height to expand back to
@@ -5276,6 +5322,7 @@ namespace KillerPDF
                         _lineAnnotColor = Color.FromArgb(_lineAnnotColor.A, c.R, c.G, c.B);
                     else
                         _highlightColor = Color.FromArgb(_highlightColor.A, c.R, c.G, c.B);
+                    ApplyDrawStyleToSelection();   // edit the selected annotation, if any
                     ShowDrawSettings(tool); // refresh selection
                 };
                 panel.Children.Add(swatch);
@@ -5305,7 +5352,7 @@ namespace KillerPDF
                     TickFrequency = 1, IsSnapToTickEnabled = true,
                     Style = (Style)FindResource("DarkSlider")
                 };
-                sizeSlider.ValueChanged += (s, e) => _drawWidth = e.NewValue;
+                sizeSlider.ValueChanged += (s, e) => { _drawWidth = e.NewValue; ApplyDrawStyleToSelection(); };
                 panel.Children.Add(sizeSlider);
 
                 var sizeLabel = new TextBlock
@@ -5366,6 +5413,7 @@ namespace KillerPDF
                 {
                     _highlightColor = Color.FromArgb(a, _highlightColor.R, _highlightColor.G, _highlightColor.B);
                 }
+                ApplyDrawStyleToSelection();   // edit the selected annotation, if any
             };
             panel.Children.Add(opacitySlider);
             panel.Children.Add(opacityLabel);
@@ -5445,6 +5493,36 @@ namespace KillerPDF
                 if (_selectionBorder is not null) _activeCanvas.Children.Add(_selectionBorder);
                 foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
             }
+        }
+
+        // Draw-bar counterpart to ApplyTextStyleToSelection: when a highlight / line / ink annotation
+        // is selected (not just being freshly drawn), push the bar's current colour, opacity and width
+        // onto it and repaint - so editing an existing annotation works the same as setting up a new one.
+        private void ApplyDrawStyleToSelection()
+        {
+            if (_selectedAnnotation is HighlightAnnotation ha)
+            {
+                ha.SetColor(ha.Style == HighlightStyle.Fill ? _highlightColor : _lineAnnotColor);
+                MarkDirty();
+                RenderAllAnnotations(ha.PageIndex);
+                ReattachSelectionVisuals();
+            }
+            else if (_selectedAnnotation is InkAnnotation ia)
+            {
+                ia.SetColor(_drawColor);
+                ia.StrokeWidth = _drawWidth;
+                MarkDirty();
+                RenderAllAnnotations(ia.PageIndex);
+                ReattachSelectionVisuals();
+            }
+        }
+
+        // RenderAllAnnotations rebuilds the page canvas from scratch, so the selection outline and any
+        // resize handles (which live on that same canvas) must be re-added after a repaint.
+        private void ReattachSelectionVisuals()
+        {
+            if (_selectionBorder is not null) _activeCanvas.Children.Add(_selectionBorder);
+            foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
         }
 
         private void ShowTextSettings()
@@ -6689,11 +6767,17 @@ namespace KillerPDF
                 return;
             // Check if click lands inside a PDF link overlay.
             // We do an explicit bounds check rather than relying on WPF hit-testing through
-            // nested transparent canvases, which is unreliable.
-            if (_linkOverlays.Count > 0)
+            // nested transparent canvases, which is unreliable. Links are only followed with the
+            // Select tool (so drawing/typing over a link region edits instead of navigating), and
+            // never when the click is on an annotation - annotations stay selectable over a link
+            // (those orphan-scan PDFs embed a page-spanning site link that otherwise eats every click).
+            if (_currentTool == EditTool.Select && _linkOverlays.Count > 0)
             {
                 var clickPos = e.GetPosition(_activeCanvas);
-                foreach (var lo in _linkOverlays)
+                int linkPage = _activeCanvas.Tag is int ltp ? ltp : PageList.SelectedIndex;
+                bool onAnnot = _annotations.TryGetValue(linkPage, out var lal)
+                               && lal.Any(a => HitTestAnnotation(a, clickPos, out _));
+                foreach (var lo in onAnnot ? Enumerable.Empty<Canvas>() : _linkOverlays)
                 {
                     double lx = Canvas.GetLeft(lo);
                     double ly = Canvas.GetTop(lo);
@@ -6763,6 +6847,42 @@ namespace KillerPDF
                                 "NE" => new Point(ax,      ay + h0),
                                 "SW" => new Point(ax + w0, ay),
                                 _    => new Point(ax,      ay)   // SE
+                            };
+                            _activeCanvas.CaptureMouse();
+                            e.Handled = true;
+                            return;
+                        }
+                        if (_selectedAnnotation is HighlightAnnotation rha)
+                        {
+                            _isResizingSig = true;          // shared "resize in progress" flag + capture
+                            _resizeHlAnnot = rha;
+                            double ax = rha.Bounds.X, ay = rha.Bounds.Y;
+                            double w0 = rha.Bounds.Width, h0 = rha.Bounds.Height;
+                            _resizeAnchor = _resizeCorner switch
+                            {
+                                "NW" => new Point(ax + w0, ay + h0),
+                                "NE" => new Point(ax,      ay + h0),
+                                "SW" => new Point(ax + w0, ay),
+                                _    => new Point(ax,      ay)   // SE
+                            };
+                            _activeCanvas.CaptureMouse();
+                            e.Handled = true;
+                            return;
+                        }
+                        if (_selectedAnnotation is InkAnnotation rink && rink.Points.Count > 0)
+                        {
+                            _isResizingSig = true;          // shared "resize in progress" flag + capture
+                            _resizeInkAnnot = rink;
+                            _resizeInkOrigPoints = [.. rink.Points];
+                            double minX = rink.Points.Min(p => p.X), minY = rink.Points.Min(p => p.Y);
+                            double maxX = rink.Points.Max(p => p.X), maxY = rink.Points.Max(p => p.Y);
+                            _resizeInkOrigBounds = new Rect(minX, minY, Math.Max(1, maxX - minX), Math.Max(1, maxY - minY));
+                            _resizeAnchor = _resizeCorner switch
+                            {
+                                "NW" => new Point(maxX, maxY),
+                                "NE" => new Point(minX, maxY),
+                                "SW" => new Point(maxX, minY),
+                                _    => new Point(minX, minY)   // SE
                             };
                             _activeCanvas.CaptureMouse();
                             e.Handled = true;
@@ -6977,9 +7097,10 @@ namespace KillerPDF
                 var rta = _resizeTextAnnot;
                 // Free-form: the dragged corner sets both width and height (the opposite corner is fixed),
                 // exactly like resizing an image or crop rectangle. Text wraps to the width and is clipped
-                // to the height.
-                double newW = Math.Max(40, Math.Abs(pos.X - _resizeAnchor.X));
-                double newH = Math.Max(20, Math.Abs(pos.Y - _resizeAnchor.Y));
+                // to the height. The corner is clamped to the page so it can't leave it.
+                var cp = ClampPointToPage(rta.PageIndex, pos);
+                double newW = Math.Max(40, Math.Abs(cp.X - _resizeAnchor.X));
+                double newH = Math.Max(20, Math.Abs(cp.Y - _resizeAnchor.Y));
                 double nx = (_resizeCorner is "NW" or "SW") ? _resizeAnchor.X - newW : _resizeAnchor.X;
                 double ny = (_resizeCorner is "NW" or "NE") ? _resizeAnchor.Y - newH : _resizeAnchor.Y;
                 rta.Width = newW;
@@ -7035,19 +7156,73 @@ namespace KillerPDF
                 return;
             }
 
+            // Highlight / strikethrough / underline resize drag (modifies the Bounds rectangle).
+            if (_isResizingSig && _resizeHlAnnot is not null)
+            {
+                var cp = ClampPointToPage(_resizeHlAnnot.PageIndex, pos);   // keep the dragged corner on-page
+                double newW = Math.Max(4, Math.Abs(cp.X - _resizeAnchor.X));
+                double newH = Math.Max(4, Math.Abs(cp.Y - _resizeAnchor.Y));
+                double nx = (_resizeCorner is "NW" or "SW") ? _resizeAnchor.X - newW : _resizeAnchor.X;
+                double ny = (_resizeCorner is "NW" or "NE") ? _resizeAnchor.Y - newH : _resizeAnchor.Y;
+                _resizeHlAnnot.Bounds = new Rect(nx, ny, newW, newH);
+                if (_selectionBorder is not null)
+                {
+                    _selectionBorder.Width  = newW + 8;
+                    _selectionBorder.Height = newH + 8;
+                    Canvas.SetLeft(_selectionBorder, nx - 4);
+                    Canvas.SetTop(_selectionBorder, ny - 4);
+                }
+                LayoutResizeHandles(nx, ny, newW, newH);
+                RenderAllAnnotations(_resizeHlAnnot.PageIndex);
+                _activeCanvas.Children.Add(_selectionBorder!);
+                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                return;
+            }
+
+            // Ink resize drag: scale every stroke point about the fixed anchor corner.
+            if (_isResizingSig && _resizeInkAnnot is not null && _resizeInkOrigPoints is not null)
+            {
+                var cp = ClampPointToPage(_resizeInkAnnot.PageIndex, pos);   // keep the dragged corner on-page
+                double newW = Math.Max(4, Math.Abs(cp.X - _resizeAnchor.X));
+                double newH = Math.Max(4, Math.Abs(cp.Y - _resizeAnchor.Y));
+                double sx = newW / _resizeInkOrigBounds.Width;
+                double sy = newH / _resizeInkOrigBounds.Height;
+                for (int i = 0; i < _resizeInkOrigPoints.Count && i < _resizeInkAnnot.Points.Count; i++)
+                {
+                    var p = _resizeInkOrigPoints[i];
+                    _resizeInkAnnot.Points[i] = new Point(
+                        _resizeAnchor.X + (p.X - _resizeAnchor.X) * sx,
+                        _resizeAnchor.Y + (p.Y - _resizeAnchor.Y) * sy);
+                }
+                var ib = AnnotBounds(_resizeInkAnnot);
+                if (_selectionBorder is not null)
+                {
+                    _selectionBorder.Width  = ib.Width + 8;
+                    _selectionBorder.Height = ib.Height + 8;
+                    Canvas.SetLeft(_selectionBorder, ib.X - 4);
+                    Canvas.SetTop(_selectionBorder, ib.Y - 4);
+                }
+                LayoutResizeHandles(ib.X, ib.Y, ib.Width, ib.Height);
+                RenderAllAnnotations(_resizeInkAnnot.PageIndex);
+                _activeCanvas.Children.Add(_selectionBorder!);
+                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                return;
+            }
+
             // Annotation drag-to-move
             if (_isDraggingAnnot && _dragAnnot is not null)
             {
                 double dx = pos.X - _dragAnnotStart.X;
                 double dy = pos.Y - _dragAnnotStart.Y;
                 AnnotSetPos(_dragAnnot, new Point(_dragAnnotOrigPos.X + dx, _dragAnnotOrigPos.Y + dy));
+                AnnotSetPos(_dragAnnot, ClampAnnotPos(_dragAnnot));   // keep the whole annotation on-page
                 var db = AnnotBounds(_dragAnnot);
                 if (_selectionBorder is not null)
                 {
                     Canvas.SetLeft(_selectionBorder, db.X - 4);
                     Canvas.SetTop(_selectionBorder, db.Y - 4);
                 }
-                if (_dragAnnot is PlacedAnnotation or TextAnnotation)
+                if (_dragAnnot is PlacedAnnotation or TextAnnotation or HighlightAnnotation or InkAnnotation)
                     LayoutResizeHandles(db.X, db.Y, db.Width, db.Height);
                 RenderAllAnnotations(_dragAnnot.PageIndex);
                 _activeCanvas.Children.Add(_selectionBorder!);
@@ -7131,12 +7306,15 @@ namespace KillerPDF
 
         // Draggable annotations (placed image/signature and typewriter text) expose a top-left
         // Position; these helpers read/write it generically so one drag path serves both.
-        private static bool IsDraggable(PageAnnotation a) => a is PlacedAnnotation or TextAnnotation or HighlightAnnotation;
+        private static bool IsDraggable(PageAnnotation a) => a is PlacedAnnotation or TextAnnotation or HighlightAnnotation or InkAnnotation;
         private static Point AnnotGetPos(PageAnnotation a) => a switch
         {
             PlacedAnnotation p => p.Position,
             TextAnnotation t   => t.Position,
             HighlightAnnotation h => h.Bounds.Location,
+            // Ink has no single origin; use the stroke's bounding-box top-left.
+            InkAnnotation ink when ink.Points.Count > 0
+                => new Point(ink.Points.Min(p => p.X), ink.Points.Min(p => p.Y)),
             _                  => default
         };
         private static void AnnotSetPos(PageAnnotation a, Point pos)
@@ -7146,6 +7324,13 @@ namespace KillerPDF
                 case PlacedAnnotation p: p.Position = pos; break;
                 case TextAnnotation t:   t.Position = pos; break;
                 case HighlightAnnotation h: h.Bounds = new Rect(pos, h.Bounds.Size); break;
+                case InkAnnotation ink when ink.Points.Count > 0:
+                    // Move the whole stroke by the delta from its current bounding-box origin.
+                    double ox = ink.Points.Min(p => p.X), oy = ink.Points.Min(p => p.Y);
+                    double dx = pos.X - ox, dy = pos.Y - oy;
+                    for (int i = 0; i < ink.Points.Count; i++)
+                        ink.Points[i] = new Point(ink.Points[i].X + dx, ink.Points[i].Y + dy);
+                    break;
             }
         }
         private Rect AnnotBounds(PageAnnotation a)
@@ -7153,6 +7338,34 @@ namespace KillerPDF
             HitTestAnnotation(a, new Point(double.MinValue, double.MinValue), out Rect b);
             return b;
         }
+
+        // Constrains a rectangle (annotation-canvas coordinates) to the page so its corners can't land
+        // off the page, where resize handles become unreachable. The page occupies (0,0)-(w,h) in the
+        // same coordinate space as annotations, taken from _renderDims. A box bigger than the page is
+        // pinned to the top-left rather than shrunk.
+        private Rect ClampRectToPage(int pageIdx, Rect r)
+        {
+            if (!_renderDims.TryGetValue(pageIdx, out var d)) return r;
+            double pw = d.w, ph = d.h;
+            double x = Math.Max(0, Math.Min(r.X, pw - r.Width));
+            double y = Math.Max(0, Math.Min(r.Y, ph - r.Height));
+            return new Rect(x, y, r.Width, r.Height);
+        }
+
+        // Clamps an annotation's position so its whole bounding box stays on its page. Returns the
+        // top-left to feed back through AnnotSetPos (which knows how to move each annotation type).
+        private Point ClampAnnotPos(PageAnnotation a)
+        {
+            var b = AnnotBounds(a);
+            return ClampRectToPage(a.PageIndex, b).Location;
+        }
+
+        // Clamps a point to the page rectangle. Used during resize so a dragged corner can't leave the
+        // page (with the opposite corner already on-page, that keeps the whole box on-page).
+        private Point ClampPointToPage(int pageIdx, Point p)
+            => _renderDims.TryGetValue(pageIdx, out var d)
+                ? new Point(Math.Max(0, Math.Min(p.X, d.w)), Math.Max(0, Math.Min(p.Y, d.h)))
+                : p;
 
         // Returns the page index + canvas under the mouse across every per-page overlay
         // (grid / two-page / continuous tiles) and the primary page canvas. Used to drop a placed
@@ -7261,6 +7474,33 @@ namespace KillerPDF
                 _resizeTextAnnot = null;
                 RenderAllAnnotations(rta.PageIndex);
                 SelectAnnotation(rta, new Rect(rta.Position.X, rta.Position.Y, rta.Width, rta.Height));
+                MarkDirty();
+                return;
+            }
+
+            // Finish highlight / strikethrough / underline resize
+            if (_isResizingSig && _resizeHlAnnot is not null)
+            {
+                _isResizingSig = false;
+                _activeCanvas?.ReleaseMouseCapture();
+                var rha = _resizeHlAnnot;
+                _resizeHlAnnot = null;
+                RenderAllAnnotations(rha.PageIndex);
+                SelectAnnotation(rha, rha.Bounds);
+                MarkDirty();
+                return;
+            }
+
+            // Finish ink resize
+            if (_isResizingSig && _resizeInkAnnot is not null)
+            {
+                _isResizingSig = false;
+                _activeCanvas?.ReleaseMouseCapture();
+                var rink = _resizeInkAnnot;
+                _resizeInkAnnot = null;
+                _resizeInkOrigPoints = null;
+                RenderAllAnnotations(rink.PageIndex);
+                SelectAnnotation(rink, AnnotBounds(rink));
                 MarkDirty();
                 return;
             }
@@ -7494,6 +7734,20 @@ namespace KillerPDF
         private void SelectAnnotation(PageAnnotation annot, Rect bounds)
         {
             _selectedAnnotation = annot;
+            // Recovery: if an annotation's corners drifted off-page (placed before the on-page guard),
+            // pull it back on selection so its handles become reachable again. Only acts when it's
+            // actually off-page, and re-derives bounds for the selection visuals below.
+            if (IsDraggable(annot))
+            {
+                var onPage = ClampAnnotPos(annot);
+                if (onPage != AnnotGetPos(annot))
+                {
+                    AnnotSetPos(annot, onPage);
+                    RenderAllAnnotations(annot.PageIndex);
+                    bounds = AnnotBounds(annot);
+                    MarkDirty();
+                }
+            }
             // Continuous-view overlays are scaled down by their LayoutTransform, which would
             // shrink the selection outline and resize handle to near-invisibility. Compensate
             // so they render at the same on-screen size as single-page view.
@@ -7513,8 +7767,9 @@ namespace KillerPDF
             Canvas.SetTop(_selectionBorder, bounds.Y - 4);
             _activeCanvas.Children.Add(_selectionBorder);
 
-            // Add four corner resize handles for resizable annotations (signature, image, text box).
-            if (annot is PlacedAnnotation or TextAnnotation)
+            // Add four corner resize handles for resizable annotations (signature, image, text box,
+            // highlight/strikethrough/underline, and ink).
+            if (annot is PlacedAnnotation or TextAnnotation or HighlightAnnotation or InkAnnotation)
             {
                 double hSize = 14 * inv;
                 _resizeHandles.Clear();
@@ -7538,6 +7793,10 @@ namespace KillerPDF
                     SignatureAnnotation => "Signature",
                     ImageAnnotation     => "Image",
                     TextAnnotation      => "Text box",
+                    HighlightAnnotation { Style: HighlightStyle.Strikethrough } => "Strikethrough",
+                    HighlightAnnotation { Style: HighlightStyle.Underline }     => "Underline",
+                    HighlightAnnotation => "Highlight",
+                    InkAnnotation       => "Drawing",
                     _                   => "Item"
                 };
                 string how = annot is TextAnnotation
@@ -7563,6 +7822,27 @@ namespace KillerPDF
                     sy = _doc.Pages[tsel.PageIndex].Height.Point / rd.h;
                 _textFontSize = Math.Max(1, Math.Round(tsel.FontSize * sy));
                 ShowTextSettings();
+            }
+            // Selecting a highlight / strikethrough / underline opens the draw bar synced to it, so its
+            // colour and opacity can be edited in place. The annotation's style picks the matching tool.
+            else if (annot is HighlightAnnotation hsel)
+            {
+                if (hsel.Style == HighlightStyle.Fill) _highlightColor = hsel.GetColor();
+                else                                   _lineAnnotColor = hsel.GetColor();
+                ShowDrawSettings(hsel.Style switch
+                {
+                    HighlightStyle.Strikethrough => EditTool.Strikethrough,
+                    HighlightStyle.Underline     => EditTool.Underline,
+                    _                            => EditTool.Highlight
+                });
+            }
+            // Selecting a freehand stroke opens the draw bar synced to it (colour, opacity and width).
+            else if (annot is InkAnnotation isel)
+            {
+                _drawColor   = isel.GetColor();
+                _drawOpacity = isel.GetColor().A;
+                _drawWidth   = isel.StrokeWidth;
+                ShowDrawSettings(EditTool.Draw);
             }
         }
 
@@ -7618,6 +7898,9 @@ namespace KillerPDF
             _isResizingSig = false;
             _resizeSigAnnot = null;
             _resizeTextAnnot = null;
+            _resizeHlAnnot = null;
+            _resizeInkAnnot = null;
+            _resizeInkOrigPoints = null;
             _isDraggingAnnot = false;
             _dragAnnot = null;
             _selectedAnnotation = null;
@@ -7625,6 +7908,11 @@ namespace KillerPDF
             // is active), close it again.
             if (_currentTool != EditTool.Text && _annotBarTool == EditTool.Text)
                 HideTextSettings();
+            // Likewise the draw bar: if it was opened to edit a selected highlight / line / ink
+            // annotation (the active tool isn't a draw-family tool), close it when the selection clears.
+            if (_currentTool is not (EditTool.Draw or EditTool.Highlight or EditTool.Strikethrough or EditTool.Underline)
+                && _annotBarTool is EditTool.Draw or EditTool.Highlight or EditTool.Strikethrough or EditTool.Underline)
+                HideDrawSettings();
         }
 
         // ---- Shift+click multi-selection (Select tool) -------------------------------------------
@@ -8678,14 +8966,20 @@ namespace KillerPDF
             _activeCanvas.Children.Add(tb);
             _activeTextBox = tb;
             tb.KeyDown += TextBox_KeyDown;
-            // Defer focus until the TextBox is actually rendered
-            tb.Loaded += (s, e) =>
+            tb.LostFocus += TextBox_LostFocus;
+            // Focus the box and attach its live resize handles once laid out. Loaded fires on first
+            // placement; a dispatcher fallback covers re-entry (Text tool -> Select -> Text again),
+            // where Loaded may have already run - without it the new box silently took no typing and
+            // showed no handles. Activate is idempotent (guards against double focus/handle attach).
+            void Activate()
             {
+                if (!ReferenceEquals(_activeTextBox, tb)) return;
                 tb.Focus();
                 Keyboard.Focus(tb);
-                tb.LostFocus += TextBox_LostFocus;
-                AttachTextEditResizeHandles(tb);
-            };
+                if (!ReferenceEquals(_tehBox, tb)) AttachTextEditResizeHandles(tb);
+            }
+            tb.Loaded += (s, e) => Activate();
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(Activate));
         }
 
         // ── Live resize handles around the editing TextBox ──────────────────────────────
@@ -8856,6 +9150,8 @@ namespace KillerPDF
                 ta.Height = (!double.IsNaN(tb.Height) && tb.Height > 0)
                     ? tb.Height
                     : MeasureTextBoxHeight(content, boxW, tb.FontSize);
+                // Keep the placed box fully on-page so its corners (and resize handles) stay reachable.
+                ta.Position = ClampRectToPage(pageIdx, new Rect(ta.Position, new Size(ta.Width, ta.Height))).Location;
                 AddAnnotation(ta);
                 RenderAllAnnotations(pageIdx);   // redraw on the correct page's canvas
             }
@@ -9543,11 +9839,22 @@ namespace KillerPDF
             if (_saveAsBtnRef != null)
             {
                 if (dirty)
-                    // orange = unsaved
-                    _saveAsBtnRef.Foreground = new SolidColorBrush(Color.FromRgb(0xff, 0xa5, 0x00));
+                {
+                    // Deeper orange = unsaved. The old #FFA500 washed out on the light theme's white
+                    // toolbar; this reads on light and dark. A soft dark halo (ShadowDepth 0) outlines
+                    // the glyph so it pops on light backgrounds and stays invisible on dark ones.
+                    _saveAsBtnRef.Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0x73, 0x00));
+                    _saveAsBtnRef.Effect = new System.Windows.Media.Effects.DropShadowEffect
+                    {
+                        Color = Colors.Black, BlurRadius = 5, ShadowDepth = 0, Opacity = 0.55
+                    };
+                }
                 else
+                {
                     // AccentLogo is green (visible) in every theme and tracks theme switches
                     _saveAsBtnRef.SetResourceReference(Control.ForegroundProperty, "AccentLogo");
+                    _saveAsBtnRef.Effect = null;
+                }
             }
         }
 
@@ -10327,24 +10634,23 @@ namespace KillerPDF
                     // Rasterize pages across CPU cores. Docnet/PDFium is not thread-safe, so the
                     // pdfium render is serialized behind a lock; the PNG encode (GDI+) runs in
                     // parallel. Pages are assembled into the PDF afterwards, in order.
+                    //
+                    // The source document is opened ONCE here. The old code re-opened it inside
+                    // the per-page loop, re-parsing the whole file on every page (O(pages) full
+                    // document parses) - the dominant cost on large files. A single scaling
+                    // factor renders each page at its own size at 150 DPI (150/72), so the doc
+                    // no longer needs reopening to apply per-page pixel dimensions.
                     var pngPages = new byte[pageCount][];
                     var docGate  = new object();
                     int done     = 0;
                     var po = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount) };
+                    using var flattenReader = DocLib.Instance.GetDocReader(sourcePath, new PageDimensions(150.0 / 72.0));
                     Parallel.For(0, pageCount, po, i =>
                     {
-                        // Per-page pixel dimensions at 150 DPI, sized to the CropBox
-                        int pw = Math.Max(1, (int)(pageDims[i].widthPt  * 150 / 72.0));
-                        int ph = Math.Max(1, (int)(pageDims[i].heightPt * 150 / 72.0));
-                        // PageDimensions requires dimOne <= dimTwo (short-edge, long-edge)
-                        int dimMin = Math.Min(pw, ph);
-                        int dimMax = Math.Max(pw, ph);
-
                         byte[] bgra; int rw, rh;
                         lock (docGate)
                         {
-                            using var pageDocReader = DocLib.Instance.GetDocReader(sourcePath, new PageDimensions(dimMin, dimMax));
-                            using var pr = pageDocReader.GetPageReader(i);
+                            using var pr = flattenReader.GetPageReader(i);
                             bgra = pr.GetImage();
                             rw   = pr.GetPageWidth();
                             rh   = pr.GetPageHeight();
@@ -10537,10 +10843,11 @@ namespace KillerPDF
             {
                 var tempClean = App.MakeTempFile("clean");
                 _doc.Save(tempClean);
-                DrawAnnotationsOnDocument();
-                printPath = App.MakeTempFile("print");
-                _doc.Save(printPath);
-                tempFlattened = printPath;
+                // The source PDF may have opened read-only (owner-password or non-standard-xref
+                // fallbacks), and XGraphics can't draw on a non-modifiable doc - that crashed the
+                // print flow. Reopen the clean snapshot in Modify and burn the annotations onto that
+                // throwaway copy; the live doc is reopened clean again below, so the burn never
+                // persists in the editing session.
                 _doc.Close();
                 try
                 {
@@ -10558,6 +10865,13 @@ namespace KillerPDF
                     tempClean = fixedPath;
                     _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
                 }
+                DrawAnnotationsOnDocument();
+                printPath = App.MakeTempFile("print");
+                _doc.Save(printPath);
+                tempFlattened = printPath;
+                // Reopen a fresh clean copy so the live doc keeps annotations as editable overlays.
+                _doc.Close();
+                _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
                 _currentFile = tempClean;
             }
             else
@@ -12019,6 +12333,16 @@ namespace KillerPDF
 
         private void PagePreviewPanel_ScrollChanged(object sender, ScrollChangedEventArgs e)
         {
+            // The vertical scrollbar can appear/disappear without a window resize (zoom, page count
+            // changes). When it does, re-anchor the annotate bars so a right-docked bar tracks the
+            // scrollbar's edge instead of getting covered (or stranded once it's gone).
+            bool vis = PagePreviewPanel.ComputedVerticalScrollBarVisibility == Visibility.Visible;
+            if (vis != _vScrollVisible)
+            {
+                _vScrollVisible = vis;
+                RepositionAnnotationBars();
+            }
+
             if (_viewMode != ViewMode.Continuous || _continuousTops.Count == 0) return;
 
             double viewportCenter = (PagePreviewPanel.VerticalOffset + PagePreviewPanel.ViewportHeight * 0.5)

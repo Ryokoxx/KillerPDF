@@ -314,8 +314,8 @@ namespace KillerPDF
                     double iw = _rasterW[idx] * s, ih = _rasterH[idx] * s;
                     // Snap to the printable area when the page is within a pixel of filling it, so the
                     // white sheet doesn't peek through as a 1px hairline at the page edge (float seam).
-                    if (iw >= (aw - 2 * m) - 1.5) iw = aw - 2 * m;
-                    if (ih >= (ah - 2 * m) - 1.5) ih = ah - 2 * m;
+                    if (iw >= (aw - 2 * m) - 1.5) iw = aw - 2 * m + 1;   // +1 bleed: covers the right hairline (clipped by the sheet)
+                    if (ih >= (ah - 2 * m) - 1.5) ih = ah - 2 * m + 1;
                     var img = new Image { Source = _pages[idx]!, Width = iw, Height = ih };
                     RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
                     Canvas.SetLeft(img, m + OffsetH(aw - 2 * m, iw));
@@ -701,12 +701,12 @@ namespace KillerPDF
             var cancel = MakeButton(S("Str_Stamp_Cancel"), false);
             cancel.Click += (_, _) => { DialogResult = false; Close(); };
             var print = MakeButton(S("Str_Ctx_Print"), true);
-            print.Margin = new Thickness(8, 0, 0, 0);
             print.Click += (_, _) => DoPrint();
             print.IsEnabled = !_isLoading;   // enabled once all pages have rendered
             _printBtn = print;
-            btnRow.Children.Add(cancel);
+            cancel.Margin = new Thickness(8, 0, 0, 0);   // gap; Cancel sits to the right of Print
             btnRow.Children.Add(print);
+            btnRow.Children.Add(cancel);
 
             // Scroll the options and PIN the buttons at the bottom, so they're never cut off when
             // the window is short or the custom-scale field is showing. Scroll wheel works too.

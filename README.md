@@ -1,8 +1,5 @@
 # KillerPDF
 
-[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/bf0a2893-0ce5-4fc8-a6cc-084ad0722ed2.svg)](https://oosmetrics.com/repo/SteveTheKiller/KillerPDF)
-[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/dd592456-00ad-445d-b97b-21e44ee4b44e.svg)](https://oosmetrics.com/repo/SteveTheKiller/KillerPDF)
-
 PDF editor for field techs. View, annotate, merge, split, edit text, draw, sign, print, flatten, and open password-protected PDFs without an Adobe subscription or a phone-home. Install or run portable. Single Windows EXE, ~6 MB zipped, no runtime install required.
 
 Landing page is hosted at [pdf.killertools.net](https://pdf.killertools.net)
@@ -72,7 +69,7 @@ winget install killerpdf
 ```
 
 - Prebuilt binary: <https://github.com/SteveTheKiller/KillerPDF/releases/latest/download/KillerPDF.exe>
-- Source (GPL3 corresponding source for this release): <https://github.com/SteveTheKiller/KillerPDF/releases/download/v1.5.1/KillerPDF-1.5.1-src.zip>
+- Source (GPL3 corresponding source for this release): <https://github.com/SteveTheKiller/KillerPDF/releases/download/v1.5.1/KillerPDF-1.6.0-src.zip>
 
 ## Build from source
 
@@ -93,3 +90,6 @@ See [CHANGELOG.md](CHANGELOG.md).
 ## License
 
 GPLv3. See [LICENSE](LICENSE). If you fork, modify, or redistribute KillerPDF, your version must also be released under GPLv3 with source available. No exceptions for commercial rebrands.
+
+[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/bf0a2893-0ce5-4fc8-a6cc-084ad0722ed2.svg)](https://oosmetrics.com/repo/SteveTheKiller/KillerPDF)
+[![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/dd592456-00ad-445d-b97b-21e44ee4b44e.svg)](https://oosmetrics.com/repo/SteveTheKiller/KillerPDF)

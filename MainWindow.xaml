@@ -877,7 +877,7 @@
 
     </Window.Resources>
 
-    <Border x:Name="RootBorder" BorderBrush="{DynamicResource AccentBorder}" BorderThickness="1" Background="{DynamicResource BgDark}" CornerRadius="7">
+    <Border x:Name="RootBorder" BorderBrush="{DynamicResource PaneBorder}" BorderThickness="1" Background="{DynamicResource BgDark}" CornerRadius="7">
     <Grid x:Name="RootClipGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="36"/>     <!-- 0: title bar -->
@@ -1338,7 +1338,7 @@
                           Width="6"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"
-                          Background="{DynamicResource PaneBorder}"
+                          Background="{DynamicResource BgCanvas}"
                           Cursor="SizeWE"
                           IsEnabled="False"
                           BorderThickness="0,0,1,0"
@@ -1365,15 +1365,38 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="{DynamicResource BgPanel}"/>
+                                <Setter Property="Background" Value="{DynamicResource BgCanvas}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Background" Value="{DynamicResource BgCanvas}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </GridSplitter.Template>
             </GridSplitter>
+
+            <!-- Elevation shadow cast by the document onto the sidebar: pokes out of the splitter
+                 handle (the 3-dot drag handle) onto the page list. ApplySidebarSide sets its side and
+                 flips its direction. Black-alpha (reads on light/gray sidebars, subtle on near-black). -->
+            <Border x:Name="SidebarShadow" Grid.Column="1" IsHitTestVisible="False" Width="12"
+                    HorizontalAlignment="Left" Margin="-12,0,0,0" Panel.ZIndex="50"
+                    RenderTransformOrigin="0.5,0.5">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Offset="0.0" Color="#3A000000"/>
+                        <GradientStop Offset="1.0" Color="#00000000"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <!-- Feather the top and bottom so the shadow has no hard horizontal ends. -->
+                <Border.OpacityMask>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Offset="0.00" Color="#00000000"/>
+                        <GradientStop Offset="0.06" Color="#FF000000"/>
+                        <GradientStop Offset="0.94" Color="#FF000000"/>
+                        <GradientStop Offset="1.00" Color="#00000000"/>
+                    </LinearGradientBrush>
+                </Border.OpacityMask>
+            </Border>
 
             <!-- Preview area: 1px frame around the document pane -->
             <Border x:Name="DocPaneBorder" Grid.Column="2" Background="{DynamicResource BgCanvas}"
@@ -1479,6 +1502,17 @@
                     </ScrollViewer>
                 </Grid>
             </Border>
+
+            <!-- Border lines bridging the slider handle to the toolbar/footer (the doc-pane border
+                 doesn't cover the splitter column). They span the splitter + document columns;
+                 ApplySidebarSide sets the start column for the sidebar side. Top = doc-pane border
+                 colour; bottom = slider accent, which continues into the sidebar-facing stripe. -->
+            <Border x:Name="DocTopAccent" Grid.Column="1" Grid.ColumnSpan="2"
+                    Height="1" VerticalAlignment="Top" IsHitTestVisible="False" Panel.ZIndex="60"
+                    Background="{DynamicResource PaneBorder}"/>
+            <Border x:Name="DocBottomAccent" Grid.Column="1" Grid.ColumnSpan="2"
+                    Height="1" VerticalAlignment="Bottom" IsHitTestVisible="False" Panel.ZIndex="60"
+                    Background="{DynamicResource DragLine}"/>
         </Grid>
 
         <!-- Status bar -->
@@ -1507,7 +1541,7 @@
             <!-- Mirror of the tab-strip shadow gradient, flipped so it darkens at the TOP (toward the
                  document) and fades down. UpdateTabStripFade clips it to the document column too. -->
             <Border x:Name="FooterFade" IsHitTestVisible="False" Background="{DynamicResource TabStripFadeBrush}"
-                    VerticalAlignment="Top" Height="14"
+                    VerticalAlignment="Top" Height="12"
                     RenderTransformOrigin="0.5,0.5">
                 <Border.RenderTransform>
                     <ScaleTransform ScaleY="-1"/>
@@ -1837,7 +1871,7 @@
                                          (clipped), so when you switch, the old row shrinks while the new one grows by
                                          the same amount: the picker slides to the selected theme and the total menu
                                          height never changes. ROYGBIV order. -->
-                                    <StackPanel x:Name="DarkAccentRow" Orientation="Horizontal" Margin="10,0,0,0" Height="0" ClipToBounds="True" Visibility="Collapsed">
+                                    <StackPanel x:Name="DarkAccentRow" Orientation="Horizontal" Margin="10,-5,0,5" Height="0" ClipToBounds="True" Visibility="Collapsed">
                                         <Border x:Name="AccentDotRed"    Style="{StaticResource AccentDot}" Background="#DD504B" Tag="Red"    MouseLeftButtonUp="AccentDot_Click"/>
                                         <Border x:Name="AccentDotOrange" Style="{StaticResource AccentDot}" Background="#E8962C" Tag="Orange" MouseLeftButtonUp="AccentDot_Click"/>
                                         <Border x:Name="AccentDotGreen"  Style="{StaticResource AccentDot}" Background="#1EA54C" Tag="Green"  MouseLeftButtonUp="AccentDot_Click"/>
@@ -1850,7 +1884,7 @@
                                                  GroupName="ThemeGroup"
                                                  Style="{StaticResource ThemeRadio}"
                                                  Checked="ThemeLightRadio_Checked"/>
-                                    <StackPanel x:Name="LightAccentRow" Orientation="Horizontal" Margin="10,0,0,0" Height="0" ClipToBounds="True" Visibility="Collapsed">
+                                    <StackPanel x:Name="LightAccentRow" Orientation="Horizontal" Margin="10,-5,0,5" Height="0" ClipToBounds="True" Visibility="Collapsed">
                                         <Border x:Name="AccentDotLightRed"    Style="{StaticResource AccentDot}" Background="#931A1A" Tag="Red"    MouseLeftButtonUp="AccentDotLight_Click"/>
                                         <Border x:Name="AccentDotLightOrange" Style="{StaticResource AccentDot}" Background="#C7710F" Tag="Orange" MouseLeftButtonUp="AccentDotLight_Click"/>
                                         <Border x:Name="AccentDotLightGreen"  Style="{StaticResource AccentDot}" Background="#18843D" Tag="Green"  MouseLeftButtonUp="AccentDotLight_Click"/>
@@ -1859,11 +1893,11 @@
                                         <Border x:Name="AccentDotLightPurple" Style="{StaticResource AccentDot}" Background="#6A1DA5" Tag="Purple" MouseLeftButtonUp="AccentDotLight_Click"/>
                                     </StackPanel>
                                     <RadioButton x:Name="ThemeHCRadio"
-                                                 Content="{DynamicResource Str_Theme_HighContrast}"
+                                                 Content="{DynamicResource Str_Theme_Black}"
                                                  GroupName="ThemeGroup"
                                                  Style="{StaticResource ThemeRadio}"
                                                  Checked="ThemeHCRadio_Checked"/>
-                                    <StackPanel x:Name="BlackAccentRow" Orientation="Horizontal" Margin="10,0,0,0" Height="0" ClipToBounds="True" Visibility="Collapsed">
+                                    <StackPanel x:Name="BlackAccentRow" Orientation="Horizontal" Margin="10,-5,0,5" Height="0" ClipToBounds="True" Visibility="Collapsed">
                                         <Border x:Name="AccentDotBlackRed"    Style="{StaticResource AccentDot}" Background="#FF2929" Tag="Red"    MouseLeftButtonUp="AccentDotBlack_Click"/>
                                         <Border x:Name="AccentDotBlackOrange" Style="{StaticResource AccentDot}" Background="#FF910A" Tag="Orange" MouseLeftButtonUp="AccentDotBlack_Click"/>
                                         <Border x:Name="AccentDotBlackGreen"  Style="{StaticResource AccentDot}" Background="#00FF66" Tag="Green"  MouseLeftButtonUp="AccentDotBlack_Click"/>

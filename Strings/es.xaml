@@ -145,7 +145,7 @@ Puede desinstalarla en cualquier momento desde Agregar o quitar programas.</sys:
     <!-- ── Theme names ────────────────────────────────────────────────── -->
     <sys:String x:Key="Str_Theme_Dark">Oscuro</sys:String>
     <sys:String x:Key="Str_Theme_Light">Claro</sys:String>
-    <sys:String x:Key="Str_Theme_HighContrast">Negro</sys:String>
+    <sys:String x:Key="Str_Theme_Black">Negro</sys:String>
     <sys:String x:Key="Str_Theme_Blood">Sangre</sys:String>
     <sys:String x:Key="Str_Theme_Greed">Codicia</sys:String>
     <sys:String x:Key="Str_Theme_Cyanotic">Cianótico</sys:String>

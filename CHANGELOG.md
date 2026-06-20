@@ -4,12 +4,12 @@ All notable changes to KillerPDF are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.5] - 2026-06-19
+## [1.5.5] - 2026-06-20
 
 ### Added
 - Strikethrough and underline annotation tools. Drag across text to mark it; each has its own color and opacity (shared bar with the highlighter) and flattens into the saved PDF.
 - Text annotation opacity: placed text can be made semi-transparent, and the text tool bar now matches the draw bar (color swatches, a size slider, and an opacity slider).
-- Resizable text boxes: the text tool now drops a word-wrapping box you can resize by dragging a corner (and double-click to re-edit), with an optional background fill (color + opacity) for clean whiteouts. Highlights, underlines, and strikethroughs can also be moved with the Select tool.
+- Resizable text boxes: the text tool now drops a word-wrapping box you can resize by dragging a corner (and double-click to re-edit), with an optional background fill (color + opacity) for clean whiteouts. Highlights, underlines, strikethroughs, and freehand ink can be moved and resized with the Select tool, and selecting any annotation reopens its tool bar so its color and opacity (and ink stroke width) can be changed in place.
 - Shift+click multi-selection in the Select tool. Hold Shift and click annotations to build up a selection of several at once (the first Shift+click folds in any current single selection), then press Delete to remove them all; Shift+click an already-selected annotation to drop it.
 - Movable Signatures popup. Drag it by its title bar to anywhere inside the window; it stays within the window bounds and its position is remembered between sessions.
 - Keyboard shortcuts: editing-tool keys (V Select, T Text, H Highlight, K Strikethrough, U Underline, D Draw, C Crop, I Image, G Signature), F1 to toggle the shortcuts list, F2 to toggle About, Ctrl+V to paste a clipboard image or text onto the page, and Esc to close the About/Settings panels. The Keyboard Shortcuts overlay now lists every shortcut (including ones that were already wired, like Ctrl+S/Ctrl+W/Ctrl+N/Ctrl+0) with a dedicated TOOLS section.
@@ -30,6 +30,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 - Settings reorganized into a slide-out accordion menu: it slides out from the sidebar's edge, and each section (Language, Theme, Toolbar, View Mode, Sidebar) expands in place and stays open after a pick so you can try options back to back.
 - Editing tool order is now Select, Text, Underline, Strikethrough, Highlight, Draw, Add Image, Signature, Crop across the toolbar, the overflow menu, and the shortcuts overlay.
 - Grid and Two-Page pages render sharper on high-DPI displays.
+- Save Flattened opens the source PDF once instead of re-parsing it for every page, so large documents flatten faster still (Issue #68).
 
 ### Fixed
 - Interactive form fields appear and fill in every view mode (previously Single Page only), line up precisely on pages with an inset CropBox or offset origin (common in government/scanned forms), and size their text from the field's own /DA instead of guessing from the box height.
@@ -112,7 +113,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 ## [1.4.2] - 2026-06-06
 
 ### Added
-- PDF form filling. Interactive PDF forms now render their fields (text inputs, checkboxes, radio buttons) as live controls. Fill them in directly and save — field values are written back into the PDF.
+- PDF form filling. Interactive PDF forms now render their fields (text inputs, checkboxes, radio buttons) as live controls. Fill them in directly and save - field values are written back into the PDF.
 - PDF outline (bookmark) support (Issue #63). A new OUTLINES tab in the sidebar displays the document's bookmark tree. Click any entry to jump to that page. The sidebar auto-fits its width to the longest entry on open and can be dragged wider; switching back to PAGES snaps to the pages-mode width.
 
 ### Fixed

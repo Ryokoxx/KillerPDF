@@ -3,7 +3,7 @@
                     xmlns:po="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options">
 
     <!-- Black family - TEAL neon accent overlay. Fixed greens (InstallBtnBg, AccentLogo) come
-         from HighContrast.xaml. -->
+         from Black.xaml. -->
     <SolidColorBrush x:Key="Accent"          Color="#0AFFE7" po:Freeze="True"/>
     <SolidColorBrush x:Key="HeaderAccent"    Color="#0AFFE7" po:Freeze="True"/>
     <SolidColorBrush x:Key="SelectionAccent" Color="#0AFFE7" po:Freeze="True"/>

@@ -147,7 +147,7 @@
     <!-- ── Theme names ────────────────────────────────────────────────── -->
     <sys:String x:Key="Str_Theme_Dark">深色</sys:String>
     <sys:String x:Key="Str_Theme_Light">淺色</sys:String>
-    <sys:String x:Key="Str_Theme_HighContrast">黑色</sys:String>
+    <sys:String x:Key="Str_Theme_Black">黑色</sys:String>
     <sys:String x:Key="Str_Theme_Blood">血色</sys:String>
     <sys:String x:Key="Str_Theme_Greed">貪婪</sys:String>
     <sys:String x:Key="Str_Theme_Cyanotic">青色</sys:String>
