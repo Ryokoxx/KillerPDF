@@ -31,6 +31,7 @@ namespace KillerPDF
         // Zoom
         private double _zoomLevel = 1.0;
         private double _lastRenderZoom = 1.0;
+        private int _renderedPrimaryPage = -1;   // primary (spread-left) page currently rasterised
         private const double ZoomMin = 0.05;
         private const double ZoomMax = 5.0;
         private const double ZoomStep = 0.15;
@@ -188,6 +189,14 @@ namespace KillerPDF
         private readonly SignatureStore _signatureStore = new();
         private SavedSignature? _pendingSignature;
         private Border? _signaturePopup;
+        // Guided AcroForm signing: "pick once, reuse" - the chosen signature/initials are remembered
+        // and dropped into every matching field. _pendingSignField, when set, routes the next pick from
+        // the popup into that field instead of free placement.
+        private SavedSignature? _activeSignatureChoice;
+        private SavedSignature? _activeInitialsChoice;
+        private (bool Initials, int ObjNum, int Page, double X, double Y, double W, double H)? _pendingSignField;
+        // Form fields already signed, so re-clicking one offers change/remove instead of re-stamping.
+        private readonly Dictionary<int, SignatureAnnotation> _signedFields = new();
 
         // Manual element refs (XAML codegen doesn't resolve these)
         private readonly Canvas _annotationCanvas = null!;
@@ -251,6 +260,13 @@ namespace KillerPDF
             _saveAsBtnRef = (Button)FindName("SaveAsBtn")!;
             _closeFileBtnRef = (Button)FindName("CloseFileBtn")!;
             _zoomBox = (ComboBox)FindName("ZoomBox")!;
+            // Read-only editable combo: hide its text-selection highlight so the displayed % never
+            // looks like selected text after a pick.
+            _zoomBox.Loaded += (_, _) =>
+            {
+                if (_zoomBox.Template?.FindName("PART_EditableTextBox", _zoomBox) is TextBox etb)
+                    etb.SelectionBrush = System.Windows.Media.Brushes.Transparent;
+            };
             _portableBadge = (StackPanel)FindName("PortableBadge")!;
             _pageJumpBox = (TextBox)FindName("PageJumpBox")!;
             _pageTotalLabel = (TextBlock)FindName("PageTotalLabel")!;
@@ -268,9 +284,10 @@ namespace KillerPDF
             // shadow gradient stays clipped to the document column.
             if (FindName("SidebarOuterGrid") is FrameworkElement sidebarOuter)
                 sidebarOuter.SizeChanged += (_, _) => UpdateTabStripFade();
-            // Recompute the fade feather masks whenever their width changes (margin/layout).
-            TabStripFade.SizeChanged += (_, _) => ApplyTabFadeFeather();
-            FooterFade.SizeChanged += (_, _) => ApplyTabFadeFeather();
+            // The footer shadow tracks the document pane's actual position; re-anchor when it (or the
+            // tab strip, which shifts the document) changes size.
+            DocPaneBorder.SizeChanged += (_, _) => UpdateFooterFade();
+            TabStripBorder.SizeChanged += (_, _) => UpdateTabStripFade();
             if (Enum.TryParse<ViewMode>(App.GetSetting("ViewMode"), out var savedVm))
                 _viewMode = savedVm;
             if (Enum.TryParse<ToolbarStyle>(App.GetSetting("ToolbarStyle"), out var savedTb))
@@ -288,7 +305,29 @@ namespace KillerPDF
 
             // Open a file passed via command-line / file association (e.g. double-clicking a .pdf)
             // Also show the portable badge when running outside the install location.
-            ContentRendered += (_, _) => Services.ThemeManager.RefreshIcons();
+            bool contentRevealed = false;
+            ContentRendered += (_, _) =>
+            {
+                Services.ThemeManager.RefreshIcons();
+                // Final pass once the layout has real widths. The tab-strip / footer shadow gradients
+                // were intermittently blank at startup (their feather mask + margin were computed
+                // before the sidebar column had measured), and only a manual sidebar tweak forced a
+                // correct re-layout. Re-running it here reproduces that fix automatically.
+                UpdateTabStripFade();
+                // The content is held invisible (RootClipGrid.Opacity=0 in XAML) until this final
+                // positioning pass has run; fade it in once so the brief unpositioned first frame
+                // (the "load deform" - shadows/toolbars snapping into place) is never visible.
+                if (!contentRevealed)
+                {
+                    contentRevealed = true;
+                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
+                    {
+                        var reveal = new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                            new Duration(TimeSpan.FromMilliseconds(140)));
+                        RootClipGrid.BeginAnimation(OpacityProperty, reveal);
+                    }));
+                }
+            };
             Services.ThemeManager.ThemeChanged += OnThemeChanged;
 
             Loaded += (_, _) =>
@@ -304,15 +343,25 @@ namespace KillerPDF
                 }
                 else
                 {
-                    // Reopen the last file if no CLI arg was provided
-                    var lastFile = App.GetSetting("LastFile");
-                    if (!string.IsNullOrEmpty(lastFile) && System.IO.File.Exists(lastFile))
-                        OpenInNewTab(lastFile!);
-                    else
+                    // Reopen every tab from the last session (falls back to the single LastFile for
+                    // settings written before multi-tab restore existed).
+                    var saved = App.GetSetting("OpenTabs");
+                    var paths = !string.IsNullOrEmpty(saved)
+                        ? saved!.Split('|')
+                        : (App.GetSetting("LastFile") is { Length: > 0 } lf ? new[] { lf } : System.Array.Empty<string>());
+                    bool openedAny = false;
+                    foreach (var f in paths)
+                        if (!string.IsNullOrEmpty(f) && System.IO.File.Exists(f)) { OpenInNewTab(f); openedAny = true; }
+                    if (!openedAny)
                     {
                         PopulateRecentFilesList();   // empty state: show the recent list
                         EnsureInitialSession();
                         RebuildTabStrip();
+                    }
+                    else if (App.GetSetting("ActiveTab") is { Length: > 0 } wantActive
+                             && _sessions.FirstOrDefault(ss => string.Equals(ss.OriginalFile, wantActive, StringComparison.OrdinalIgnoreCase)) is { } activeTarget)
+                    {
+                        SwitchToTab(activeTarget);   // restore which tab was focused
                     }
                 }
 
@@ -1512,6 +1561,21 @@ namespace KillerPDF
                     App.SetSetting("LastFile", _currentFile);
                 else
                     App.RemoveSetting("LastFile");
+                // Remember every open tab so the whole session restores next launch. Manually-closed
+                // tabs are already gone from _sessions, so they won't come back (Issue #75 still holds).
+                var openFiles = _sessions
+                    .Select(ss => ss.OriginalFile)
+                    .Where(f => !string.IsNullOrEmpty(f) && System.IO.File.Exists(f))
+                    .Distinct()
+                    .ToList();
+                if (openFiles.Count > 0)
+                    App.SetSetting("OpenTabs", string.Join("|", openFiles!));
+                else
+                    App.RemoveSetting("OpenTabs");
+                if (_active?.OriginalFile is { Length: > 0 } af && System.IO.File.Exists(af))
+                    App.SetSetting("ActiveTab", af);
+                else
+                    App.RemoveSetting("ActiveTab");
             }
             catch { /* best-effort */ }
         }
@@ -2426,6 +2490,9 @@ namespace KillerPDF
         private void RenderPage(int pageIndex)
         {
             if (_currentFile is null || _doc is null) return;
+            // Two-page spreads pair (0,1),(2,3),...; render the pair's left (even) page as primary so
+            // selecting the right page of a pair still shows the whole spread, not a lone page.
+            if (_viewMode == ViewMode.TwoPage) pageIndex -= pageIndex % 2;
             try
             {
                 // Scale render resolution to match display DPI AND current zoom so the
@@ -2494,6 +2561,7 @@ namespace KillerPDF
                     RenderAdditionalPages(pageIndex);
                     RenderPageLinks(pageIndex, dipW, dipH);
                 });
+                _renderedPrimaryPage = pageIndex;
             }
             catch (Exception ex)
             {
@@ -2506,6 +2574,25 @@ namespace KillerPDF
         /// Clears all dynamically-added secondary page borders from the panel,
         /// leaving only the first child (the primary page border).
         /// </summary>
+        // Removes secondary tiles whose page is no longer shown (keeps the primary at index 0 and any
+        // tile still in range so it can be reused in place). Keeps the tile map in sync.
+        private void RemoveSecondaryTilesNotIn(HashSet<int> keep)
+        {
+            if (_pageContentPanel is null) return;
+            var stale = new List<int>();
+            foreach (var k in _continuousCanvases.Keys)
+                if (!keep.Contains(k)) stale.Add(k);
+            foreach (var pg in stale)
+            {
+                if (_continuousCanvases.TryGetValue(pg, out var ov) && ov.Parent is Grid g && g.Parent is Border tile)
+                {
+                    foreach (var gc in g.Children) if (gc is Image im) im.Source = null;
+                    _pageContentPanel.Children.Remove(tile);
+                }
+                _continuousCanvases.Remove(pg);
+            }
+        }
+
         private void ClearSecondaryPages()
         {
             if (_pageContentPanel is null) return;
@@ -2529,6 +2616,7 @@ namespace KillerPDF
             foreach (var lo in _linkOverlays)
                 _annotationCanvas.Children.Remove(lo);
             _linkOverlays.Clear();
+            _continuousCanvases.Clear();   // keep the page->tile map in sync with the visible tiles
         }
 
         /// <summary>
@@ -2542,11 +2630,11 @@ namespace KillerPDF
             // Grid is a stable overview anchored at page 0 (independent of the selected page), so it
             // always shows the whole document instead of only the selected page onward.
             if (_viewMode == ViewMode.Grid) primaryPageIdx = 0;
-            ClearSecondaryPages();
 
             double viewportW = PagePreviewPanel.ActualWidth;
             if (viewportW <= 0 || _doc.PageCount <= 1)
             {
+                ClearSecondaryPages();
                 _pageContentPanel.Width = double.NaN;
                 return;
             }
@@ -2575,7 +2663,15 @@ namespace KillerPDF
             int limit = _viewMode == ViewMode.Grid
                 ? _doc.PageCount
                 : Math.Min(_doc.PageCount, primaryPageIdx + 1 + (_viewMode == ViewMode.TwoPage ? 1 : 25));
-            if (limit <= primaryPageIdx + 1) return;
+            if (limit <= primaryPageIdx + 1) { ClearSecondaryPages(); return; }
+
+            // Per-tile reuse: drop tiles for pages that left the view, keep the rest. Pages that already
+            // have a tile get their bitmap swapped in place (AddSecondaryTile); only genuinely new pages
+            // are built. Stays smooth even mid-stream on a large doc, where the tile set is only partly
+            // built. (Navigation clears everything via RenderPage first, so it rebuilds.)
+            var keepPages = new HashSet<int>();
+            for (int i = primaryPageIdx + 1; i < limit; i++) keepPages.Add(i);
+            RemoveSecondaryTilesNotIn(keepPages);
 
             string currentFile = _currentFile;
 
@@ -2588,7 +2684,6 @@ namespace KillerPDF
             // Capture the primary page width and reset the tile map on the UI thread before
             // streaming tiles in from the background render.
             double primaryDipW = _annotationCanvas.Width > 0 ? _annotationCanvas.Width : 595;
-            _continuousCanvases.Clear();
 
             // Render pixels on a background thread and attach each page tile to the UI as soon
             // as it is ready, so large documents fill in progressively instead of blocking
@@ -2611,12 +2706,19 @@ namespace KillerPDF
 
                         int pi = i, pw = w, ph = h;
                         byte[] bytes = rawBytes;
-                        Dispatcher.Invoke(() =>
+                        try
                         {
-                            if (cts.IsCancellationRequested || _doc is null) return;
-                            if (_viewMode != ViewMode.Grid && _viewMode != ViewMode.TwoPage) return;
-                            AddSecondaryTile(pi, pw, ph, bytes, primaryDipW);
-                        });
+                            Dispatcher.Invoke(() =>
+                            {
+                                if (cts.IsCancellationRequested || _doc is null) return;
+                                if (_viewMode != ViewMode.Grid && _viewMode != ViewMode.TwoPage) return;
+                                AddSecondaryTile(pi, pw, ph, bytes, primaryDipW);
+                            });
+                        }
+                        // Dispatcher.Invoke throws when the dispatcher is shutting down (app closing) or
+                        // the render was cancelled; stop rendering cleanly instead of crashing.
+                        catch (System.Threading.Tasks.TaskCanceledException) { break; }
+                        catch (OperationCanceledException) { break; }
                     }
                 }, cts.Token);
             }
@@ -2634,13 +2736,22 @@ namespace KillerPDF
             double bitmapDpiX = 96.0 * w / pageDipW;
             double bitmapDpiY = 96.0 * h / pageDipH;
 
+            var bitmap = new WriteableBitmap(w, h, bitmapDpiX, bitmapDpiY, PixelFormats.Bgra32, null);
+            bitmap.WritePixels(new Int32Rect(0, 0, w, h), rawBytes, w * 4, 0);
+
+            // This page already has a tile: swap just the bitmap (same logical size, crisper pixels).
+            // No clear, no reflow - so the grid/spread never jumps or blinks.
+            if (_continuousCanvases.TryGetValue(pi, out var exOverlay)
+                && exOverlay.Parent is Grid exGrid && exGrid.Children.Count > 0 && exGrid.Children[0] is Image exImg)
+            {
+                exImg.Source = bitmap;
+                return;
+            }
+
             // Do NOT overwrite _renderDims if the page was already rendered as primary -
             // its annotation coordinate mapping must stay intact.
             if (!_renderDims.ContainsKey(pi))
                 _renderDims[pi] = (pageDipW, pageDipH);
-
-            var bitmap = new WriteableBitmap(w, h, bitmapDpiX, bitmapDpiY, PixelFormats.Bgra32, null);
-            bitmap.WritePixels(new Int32Rect(0, 0, w, h), rawBytes, w * 4, 0);
 
             var img = new Image { Source = bitmap, Stretch = Stretch.None };
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
@@ -2752,6 +2863,7 @@ namespace KillerPDF
         {
             if (_viewMode == ViewMode.Continuous)
                 return; // continuous mode manages its own rendering
+            if (_viewMode == ViewMode.TwoPage) pageIndex -= pageIndex % 2;   // snap to the spread's left page
 
             // Grid fits its columns to the viewport, so it never needs a horizontal scrollbar.
             // Leaving it on Auto shows a stray (green) thumb across the bottom when the tile panel
@@ -3069,7 +3181,12 @@ namespace KillerPDF
                 UIElement? ctrl = null;
 
                 // ── Text field ────────────────────────────────────────────────────
-                if (!f.IsCheckBox && !f.IsRadio && f.FieldType != "/Ch")
+                var fillRole = ClassifyFormField(f);
+                if (fillRole == FormFillRole.Signature || fillRole == FormFillRole.Initials)
+                {
+                    ctrl = BuildSignZone(f, fillRole == FormFillRole.Initials, pageIndex);
+                }
+                else if (!f.IsCheckBox && !f.IsRadio && f.FieldType != "/Ch")
                 {
                     string cur     = _formTextValues.TryGetValue(f.ObjNum, out var tv) ? tv : f.CurrentValue;
                     // Size text the way the field intends: use its /DA font size when one is given;
@@ -5891,170 +6008,224 @@ namespace KillerPDF
             // Title doubles as a drag handle so the user can move the popup anywhere inside the
             // document area (position is remembered). Wrapped in a transparent Border so the whole
             // title strip is grabbable, not just the text glyphs.
+            var sigHeaderGrid = new Grid();
+            sigHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            sigHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var sigTitleText = new TextBlock
+            {
+                Text = Loc("Str_Sig_Title"),
+                Foreground = (SolidColorBrush)FindResource("TextPrimary"),
+                FontFamily = new FontFamily("Segoe UI"),
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 13,
+                Margin = new Thickness(4, 2, 4, 2),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(sigTitleText, 0);
+            // Close X, matching the Settings panel's close glyph (Segoe MDL2). A TextBlock (not Button)
+            // keeps it chromeless; e.Handled stops the click from starting the header drag.
+            var sigCloseBtn = new TextBlock
+            {
+                Text = "\ue711",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 11,
+                Foreground = (SolidColorBrush)FindResource("TextSecondary"),
+                Cursor = Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0),
+                Padding = new Thickness(4)
+            };
+            sigCloseBtn.MouseEnter += (_, _) => sigCloseBtn.Foreground = (SolidColorBrush)FindResource("TextPrimary");
+            sigCloseBtn.MouseLeave += (_, _) => sigCloseBtn.Foreground = (SolidColorBrush)FindResource("TextSecondary");
+            sigCloseBtn.MouseLeftButtonDown += (_, e) =>
+            {
+                e.Handled = true;
+                HideSignaturePopup();
+                if (_currentTool == EditTool.Signature && _pendingSignature is null)
+                    SetTool(EditTool.Select);
+            };
+            Grid.SetColumn(sigCloseBtn, 1);
+            sigHeaderGrid.Children.Add(sigTitleText);
+            sigHeaderGrid.Children.Add(sigCloseBtn);
             var sigHeader = new Border
             {
                 Background = Brushes.Transparent,
                 Margin     = new Thickness(0, 0, 0, 4),
-                Child = new TextBlock
-                {
-                    Text = Loc("Str_Sig_Title"),
-                    Foreground = (SolidColorBrush)FindResource("TextPrimary"),
-                    FontFamily = new FontFamily("Segoe UI"),
-                    FontWeight = FontWeights.SemiBold,
-                    FontSize = 13,
-                    Margin = new Thickness(4, 2, 4, 2)
-                }
+                Child = sigHeaderGrid
             };
             stack.Children.Add(sigHeader);
 
-            // Saved signatures
-            if (_signatureStore.Signatures.Count > 0)
+            // Saved signatures and initials, shown as two labelled sections so the HR-style
+            // "initial here, sign there" flow can pick each independently. One tile builder is shared.
+            UIElement MakeSigItem(SavedSignature sigCopy)
             {
-                var scroll = new ScrollViewer
+                var item = new Border
                 {
-                    MaxHeight = 260,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+                    Background = Brushes.White,
+                    BorderBrush = _swatchDimBorder,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(3),
+                    Margin = new Thickness(4, 2, 4, 2),
+                    Padding = new Thickness(4),
+                    Cursor = Cursors.Hand,
+                    Height = 60,
+                    HorizontalAlignment = HorizontalAlignment.Stretch
                 };
-                var listPanel = new StackPanel();
 
-                foreach (var sig in _signatureStore.Signatures)
+                if (sigCopy.ImageData is not null)
                 {
-                    var sigCopy = sig; // capture for lambda
-                    var item = new Border
+                    try
                     {
-                        Background = Brushes.White,
-                        BorderBrush = _swatchDimBorder,
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(3),
-                        Margin = new Thickness(4, 2, 4, 2),
-                        Padding = new Thickness(4),
-                        Cursor = Cursors.Hand,
-                        Height = 60,
-                        Width = 220
-                    };
-
-                    // Render mini signature preview
-                    if (sigCopy.ImageData is not null)
-                    {
-                        try
+                        var imgBytes = Convert.FromBase64String(sigCopy.ImageData);
+                        var bmpImg = new System.Windows.Media.Imaging.BitmapImage();
+                        bmpImg.BeginInit();
+                        bmpImg.StreamSource = new System.IO.MemoryStream(imgBytes);
+                        bmpImg.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bmpImg.EndInit();
+                        item.Child = new System.Windows.Controls.Image
                         {
-                            var imgBytes = Convert.FromBase64String(sigCopy.ImageData);
-                            var bmpImg = new System.Windows.Media.Imaging.BitmapImage();
-                            bmpImg.BeginInit();
-                            bmpImg.StreamSource = new System.IO.MemoryStream(imgBytes);
-                            bmpImg.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                            bmpImg.EndInit();
-                            item.Child = new System.Windows.Controls.Image
-                            {
-                                Source = bmpImg,
-                                Width = 210, Height = 50,
-                                Stretch = System.Windows.Media.Stretch.Uniform,
-                                IsHitTestVisible = false
-                            };
-                        }
-                        catch { item.Child = new TextBlock { Text = "(image)", IsHitTestVisible = false }; }
-                    }
-                    else
-                    {
-                        var canvas = new Canvas
-                        {
-                            Width = 210, Height = 50,
-                            Background = Brushes.Transparent,
+                            Source = bmpImg,
+                            Height = 50,
+                            HorizontalAlignment = HorizontalAlignment.Stretch,
+                            Stretch = System.Windows.Media.Stretch.Uniform,
                             IsHitTestVisible = false
                         };
-                        RenderSignaturePreview(canvas, sigCopy, 210, 50);
-                        item.Child = canvas;
                     }
-
-                    item.MouseLeftButtonDown += (s, e) =>
-                    {
-                        _pendingSignature = sigCopy;
-                        HideSignaturePopup();
-                        _annotationCanvas.Cursor = Cursors.Cross;
-                        SetStatus("Click on the page to place your signature");
-                    };
-                    item.MouseEnter += (s, e) =>
-                        ((Border)s!).BorderBrush = (SolidColorBrush)FindResource("Accent");
-                    item.MouseLeave += (s, e) =>
-                        ((Border)s!).BorderBrush = _swatchDimBorder;
-
-                    // Wrap in grid with delete button
-                    var itemGrid = new Grid();
-                    itemGrid.Children.Add(item);
-
-                    var delBtn = new Button
-                    {
-                        Content = "\ue711",
-                        FontSize = 10,
-                        Width = 18, Height = 18,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        VerticalAlignment = VerticalAlignment.Top,
-                        Margin = new Thickness(0, 0, 2, 0),
-                        Background = new SolidColorBrush(Color.FromArgb(200, 30, 30, 30)),
-                        Foreground = (SolidColorBrush)FindResource("DangerRed"),
-                        BorderThickness = new Thickness(0),
-                        Cursor = Cursors.Hand,
-                        Padding = new Thickness(0),
-                        Style = (Style)FindResource("ToolbarButton")
-                    };
-                    delBtn.Click += (s, e) =>
-                    {
-                        _signatureStore.Remove(sigCopy);
-                        PersistSignatures();
-                        ShowSignaturePopup(); // refresh
-                    };
-                    itemGrid.Children.Add(delBtn);
-                    listPanel.Children.Add(itemGrid);
+                    catch { item.Child = new TextBlock { Text = "(image)", IsHitTestVisible = false }; }
                 }
-                scroll.Content = listPanel;
-                stack.Children.Add(scroll);
+                else
+                {
+                    var canvas = new Canvas
+                    {
+                        Width = 288, Height = 50,
+                        Background = Brushes.Transparent,
+                        IsHitTestVisible = false
+                    };
+                    RenderSignaturePreview(canvas, sigCopy, 288, 50);
+                    item.Child = canvas;
+                }
+
+                item.MouseLeftButtonDown += (s, e) =>
+                {
+                    HideSignaturePopup();
+                    // If a signature field is waiting, fill it and remember the choice (pick once, reuse).
+                    if (_pendingSignField is { } tgt)
+                    {
+                        if (tgt.Initials) _activeInitialsChoice = sigCopy; else _activeSignatureChoice = sigCopy;
+                        var t = tgt; _pendingSignField = null;
+                        DropSignatureInField(t.ObjNum, sigCopy, t.Page, t.X, t.Y, t.W, t.H);
+                        return;
+                    }
+                    _pendingSignature = sigCopy;
+                    _annotationCanvas.Cursor = Cursors.Cross;
+                    SetStatus(sigCopy.Kind == SignatureKind.Initials
+                        ? "Click on the page to place your initials"
+                        : "Click on the page to place your signature");
+                };
+                item.MouseEnter += (s, e) =>
+                    ((Border)s!).BorderBrush = (SolidColorBrush)FindResource("Accent");
+                item.MouseLeave += (s, e) =>
+                    ((Border)s!).BorderBrush = _swatchDimBorder;
+
+                var itemGrid = new Grid();
+                itemGrid.Children.Add(item);
+
+                var delBtn = new Button
+                {
+                    Content = "\ue711",
+                    FontSize = 10,
+                    Width = 18, Height = 18,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(0, 0, 2, 0),
+                    Background = new SolidColorBrush(Color.FromArgb(200, 30, 30, 30)),
+                    Foreground = (SolidColorBrush)FindResource("DangerRed"),
+                    BorderThickness = new Thickness(0),
+                    Cursor = Cursors.Hand,
+                    Padding = new Thickness(0),
+                    Style = (Style)FindResource("ToolbarButton")
+                };
+                delBtn.Click += (s, e) =>
+                {
+                    _signatureStore.Remove(sigCopy);
+                    PersistSignatures();
+                    ShowSignaturePopup(); // refresh
+                };
+                itemGrid.Children.Add(delBtn);
+                return itemGrid;
             }
-            else
+
+            // Section = header + saved tiles (or a "none yet" hint) + Create/Import for that Kind.
+            void AddSigSection(string sectionTitle, SignatureKind kind)
             {
                 stack.Children.Add(new TextBlock
                 {
-                    Text = Loc("Str_Sig_None"),
+                    Text = sectionTitle,
                     Foreground = (SolidColorBrush)FindResource("TextSecondary"),
                     FontFamily = new FontFamily("Segoe UI"),
+                    FontWeight = FontWeights.SemiBold,
                     FontSize = 11,
-                    FontStyle = FontStyles.Italic,
-                    Margin = new Thickness(4, 4, 4, 8),
-                    HorizontalAlignment = HorizontalAlignment.Center
+                    Margin = new Thickness(4, 6, 4, 2)
                 });
+
+                var items = _signatureStore.Signatures.Where(x => x.Kind == kind).ToList();
+                if (items.Count > 0)
+                {
+                    var scroll = new ScrollViewer
+                    {
+                        MaxHeight = 170,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+                    };
+                    var listPanel = new StackPanel();
+                    foreach (var sig in items)
+                        listPanel.Children.Add(MakeSigItem(sig));
+                    scroll.Content = listPanel;
+                    stack.Children.Add(scroll);
+                }
+                else
+                {
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = Loc("Str_Sig_None"),
+                        Foreground = (SolidColorBrush)FindResource("TextSecondary"),
+                        FontFamily = new FontFamily("Segoe UI"),
+                        FontSize = 11,
+                        FontStyle = FontStyles.Italic,
+                        Margin = new Thickness(4, 2, 4, 6),
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    });
+                }
+
+                var rowBtns = new Grid { Margin = new Thickness(4, 8, 4, 2) };
+                rowBtns.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                rowBtns.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                var createBtn = UiButtons.Make(Loc("Str_Sig_Create"), accent: true);
+                createBtn.HorizontalAlignment = HorizontalAlignment.Stretch;
+                createBtn.Margin = new Thickness(0, 0, 3, 0);
+                createBtn.Click += (s, e) => { HideSignaturePopup(); OpenSignatureCreator(kind); ShowSignaturePopup(); };
+                var importBtn = UiButtons.Make(Loc("Str_Sig_Import"), accent: false);
+                importBtn.HorizontalAlignment = HorizontalAlignment.Stretch;
+                importBtn.Margin = new Thickness(3, 0, 0, 0);
+                importBtn.Click += (s, e) => { HideSignaturePopup(); ImportImageSignature(kind); ShowSignaturePopup(); };
+                Grid.SetColumn(createBtn, 0);
+                Grid.SetColumn(importBtn, 1);
+                rowBtns.Children.Add(createBtn);
+                rowBtns.Children.Add(importBtn);
+                stack.Children.Add(rowBtns);
             }
 
-            // Separator
+            AddSigSection("Signatures", SignatureKind.Signature);
+
             stack.Children.Add(new Rectangle
             {
                 Height = 1,
                 Fill = (SolidColorBrush)FindResource("BorderDim"),
-                Margin = new Thickness(4, 4, 4, 4)
+                Margin = new Thickness(4, 6, 4, 2)
             });
 
-            // Create Signature button
-            // Shared themed buttons (see UiButtons): Create is the primary/accent action.
-            var createBtn = UiButtons.Make(Loc("Str_Sig_Create"), accent: true);
-            createBtn.Margin = new Thickness(4);
-            createBtn.HorizontalAlignment = HorizontalAlignment.Stretch;
-            createBtn.Click += (s, e) =>
-            {
-                HideSignaturePopup();
-                OpenSignatureCreator();
-            };
-            stack.Children.Add(createBtn);
-
-            // Import image button
-            // Import is the secondary action.
-            var importBtn = UiButtons.Make(Loc("Str_Sig_Import"), accent: false);
-            importBtn.Margin = new Thickness(4, 2, 4, 4);
-            importBtn.HorizontalAlignment = HorizontalAlignment.Stretch;
-            importBtn.Click += (s, e) =>
-            {
-                HideSignaturePopup();
-                ImportImageSignature();
-            };
-            stack.Children.Add(importBtn);
+            AddSigSection("Initials", SignatureKind.Initials);
 
             // Match the Settings/menu popups: themed modal surface + accent border + film grain.
             var sigContent = new Grid();
@@ -6077,7 +6248,7 @@ namespace KillerPDF
                 Child = sigContent,
                 // Free-positioned (Left/Top) inside the document grid so it can be dragged; the
                 // exact spot is set after layout from the saved position (or a default top-right).
-                Width = 248,
+                Width = 320,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 4, 0, 0),
@@ -6217,7 +6388,7 @@ namespace KillerPDF
                 var poly = new Polyline
                 {
                     Stroke = Brushes.Black,
-                    StrokeThickness = 1.5,
+                    StrokeThickness = Math.Max(0.8, sig.StrokeWidth * scale),
                     StrokeLineJoin = PenLineJoin.Round,
                     StrokeStartLineCap = PenLineCap.Round,
                     StrokeEndLineCap = PenLineCap.Round
@@ -6228,7 +6399,7 @@ namespace KillerPDF
             }
         }
 
-        private void OpenSignatureCreator()
+        private void OpenSignatureCreator(SignatureKind kind = SignatureKind.Signature)
         {
             var win = new Window
             {
@@ -6251,7 +6422,7 @@ namespace KillerPDF
                 Background      = (SolidColorBrush)FindResource("BgModal"),
                 BorderBrush     = (SolidColorBrush)FindResource("PaneBorder"),   // 1px doc-pane frame
                 BorderThickness = new Thickness(1),
-                CornerRadius    = new CornerRadius(6),
+                CornerRadius    = new CornerRadius(7),
                 Margin          = new Thickness(10),    // transparent halo so the drop shadow can render
                 Effect          = new System.Windows.Media.Effects.DropShadowEffect
                 {
@@ -6314,6 +6485,9 @@ namespace KillerPDF
             var canvasBorder = new Border
             {
                 Background = Brushes.White,
+                // Faint outline so the white drawing pane reads as a distinct field on the modal.
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0xcc, 0xcc, 0xcc)),
+                BorderThickness = new Thickness(1),
                 Margin = new Thickness(12, 12, 12, 4),
                 CornerRadius = new CornerRadius(4),
                 Height = 170
@@ -6345,6 +6519,7 @@ namespace KillerPDF
             var strokes = new List<List<Point>>();
             List<Point>? currentStroke = null;
             Polyline? currentPoly = null;
+            double penWidth = 2.5;   // medium; set by the pen-width selector below
 
             drawCanvas.MouseLeftButtonDown += (s, e) =>
             {
@@ -6356,7 +6531,7 @@ namespace KillerPDF
                 currentPoly = new Polyline
                 {
                     Stroke = Brushes.Black,
-                    StrokeThickness = 2,
+                    StrokeThickness = penWidth,
                     StrokeLineJoin = PenLineJoin.Round,
                     StrokeStartLineCap = PenLineCap.Round,
                     StrokeEndLineCap = PenLineCap.Round
@@ -6389,6 +6564,43 @@ namespace KillerPDF
 
             contentArea.Children.Add(canvasBorder);
 
+            // Pen-width selector: three preset thicknesses, active one highlighted. On the left so the
+            // modal does not read bottom-right-heavy.
+            var penRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 6, 12, 0), VerticalAlignment = VerticalAlignment.Center };
+            penRow.Children.Add(new TextBlock { Text = "Pen", Foreground = (SolidColorBrush)FindResource("TextSecondary"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
+            var penOptions = new (string Label, double W)[] { ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.0) };
+            var penBtns = new List<Button>();
+            void RefreshPen()
+            {
+                for (int bi = 0; bi < penBtns.Count; bi++)
+                {
+                    bool active = Math.Abs(penOptions[bi].W - penWidth) < 0.01;
+                    penBtns[bi].Background  = active ? (SolidColorBrush)FindResource("SelectionBg") : (SolidColorBrush)FindResource("BgPanel");
+                    penBtns[bi].Foreground  = active ? (SolidColorBrush)FindResource("SelectionFg") : (SolidColorBrush)FindResource("TextPrimary");
+                    penBtns[bi].BorderBrush = active ? (SolidColorBrush)FindResource("Accent")      : (SolidColorBrush)FindResource("BorderDim");
+                }
+            }
+            foreach (var (lbl, w) in penOptions)
+            {
+                double ww = w;
+                var pb = new Button
+                {
+                    Content = lbl,
+                    Style = (Style)FindResource("DarkButton"),
+                    Padding = new Thickness(12, 3, 12, 3),
+                    Margin = new Thickness(0, 0, 6, 0),
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    FontFamily = new FontFamily("Segoe UI"),
+                    FontSize = 11
+                };
+                pb.Click += (s2, e2) => { penWidth = ww; RefreshPen(); };
+                penBtns.Add(pb);
+                penRow.Children.Add(pb);
+            }
+            RefreshPen();
+            contentArea.Children.Add(penRow);
+
             // Buttons
             var btnPanel = new StackPanel
             {
@@ -6397,18 +6609,8 @@ namespace KillerPDF
                 Margin = new Thickness(12, 4, 12, 12)
             };
 
-            var clearBtn = new Button
-            {
-                Content = Loc("Str_Sig_Clear"),
-                Style = (Style)FindResource("DarkButton"),
-                Padding = new Thickness(16, 6, 16, 6),
-                Margin = new Thickness(0, 0, 8, 0),
-                Background = (SolidColorBrush)FindResource("BgPanel"),
-                Foreground = (SolidColorBrush)FindResource("TextPrimary"),
-                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
-                BorderThickness = new Thickness(1),
-                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI")
-            };
+            var clearBtn = UiButtons.Make(Loc("Str_Sig_Clear"), accent: false);
+            clearBtn.Margin = new Thickness(0, 0, 8, 0);
             clearBtn.Click += (s, e) =>
             {
                 strokes.Clear();
@@ -6416,35 +6618,8 @@ namespace KillerPDF
                 placeholder.Visibility = Visibility.Visible;
                 drawCanvas.Children.Add(placeholder);
             };
-            clearBtn.MouseEnter += (s, e) => clearBtn.Background = (SolidColorBrush)FindResource("BgHover");
-            clearBtn.MouseLeave += (s, e) => clearBtn.Background = (SolidColorBrush)FindResource("BgPanel");
 
-            // Primary button, but subtle at rest (accent text/border on the panel colour) so it
-            // doesn't read as a solid white block in the white-accent themes; it fills on hover.
-            var saveBtn = new Button
-            {
-                Content = Loc("Str_Sig_SaveSig"),
-                Style = (Style)FindResource("DarkButton"),
-                Padding = new Thickness(16, 6, 16, 6),
-                Background = (SolidColorBrush)FindResource("BgPanel"),
-                // Use the scrollbar's softer accent (peach in the RGB themes, green in Dark) rather
-                // than the stark white Accent so the primary button doesn't glare.
-                Foreground = (SolidColorBrush)FindResource("ScrollThumbHover"),
-                BorderBrush = (SolidColorBrush)FindResource("AccentBorder"),
-                BorderThickness = new Thickness(1),
-                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
-                FontWeight = FontWeights.SemiBold
-            };
-            saveBtn.MouseEnter += (s, e) =>
-            {
-                saveBtn.Background = (SolidColorBrush)FindResource("ScrollThumbHover");
-                saveBtn.Foreground = (SolidColorBrush)FindResource("BgModal");
-            };
-            saveBtn.MouseLeave += (s, e) =>
-            {
-                saveBtn.Background = (SolidColorBrush)FindResource("BgPanel");
-                saveBtn.Foreground = (SolidColorBrush)FindResource("ScrollThumbHover");
-            };
+            var saveBtn = UiButtons.Make(Loc("Str_Sig_SaveSig"), accent: true);
             saveBtn.Click += (s, e) =>
             {
                 if (strokes.Count == 0)
@@ -6458,9 +6633,11 @@ namespace KillerPDF
 
                 var saved = new SavedSignature
                 {
+                    Kind = kind,
+                    StrokeWidth = penWidth,
                     CanvasWidth = cw,
                     CanvasHeight = ch,
-                    Name = $"Signature {_signatureStore.Signatures.Count + 1}"
+                    Name = $"{(kind == SignatureKind.Initials ? "Initials" : "Signature")} {_signatureStore.Signatures.Count(x => x.Kind == kind) + 1}"
                 };
                 foreach (var stroke in strokes)
                 {
@@ -6500,7 +6677,7 @@ namespace KillerPDF
             win.ShowDialog();
         }
 
-        private void ImportImageSignature()
+        private void ImportImageSignature(SignatureKind kind = SignatureKind.Signature)
         {
             var dlg = new OpenFileDialog
             {
@@ -6523,6 +6700,7 @@ namespace KillerPDF
 
                 var saved = new SavedSignature
                 {
+                    Kind = kind,
                     Name = System.IO.Path.GetFileNameWithoutExtension(dlg.FileName),
                     CanvasWidth = bmp.PixelWidth,
                     CanvasHeight = bmp.PixelHeight,
@@ -6534,7 +6712,6 @@ namespace KillerPDF
                 _pendingSignature = saved;
                 _annotationCanvas.Cursor = Cursors.Cross;
                 SetStatus("Image loaded - click on the page to place it");
-                ShowSignaturePopup(); // refresh to show the new entry
             }
             catch (Exception ex)
             {
@@ -6548,13 +6725,14 @@ namespace KillerPDF
             if (_pendingSignature is null) return;
 
             var sig = _pendingSignature;
-            double scale = 0.5;
+            double scale = sig.Kind == SignatureKind.Initials ? 0.3 : 0.5;
 
             var annot = new SignatureAnnotation
             {
                 PageIndex = pageIdx,
                 Position = pos,
                 Scale = scale,
+                StrokeWidth = sig.StrokeWidth,
                 SourceWidth = sig.CanvasWidth,
                 SourceHeight = sig.CanvasHeight,
                 ImageData = sig.ImageData
@@ -6577,6 +6755,132 @@ namespace KillerPDF
             double sigH = sig.CanvasHeight * scale;
             SelectAnnotation(annot, new Rect(pos.X, pos.Y, sigW, sigH));
             SetStatus("Signature placed — drag to reposition, use the corner handle to resize");
+        }
+
+        // Guided AcroForm signing -------------------------------------------------------------------
+        private enum FormFillRole { None, Signature, Initials, Date }
+
+        // Classifies a fillable text field by its name so signature / initials fields become
+        // click-to-sign zones. Checkboxes, radios, and dropdowns are never sign fields.
+        private static FormFillRole ClassifyFormField(FormFieldInfo f)
+        {
+            if (f.IsCheckBox || f.IsRadio || f.FieldType == "/Ch") return FormFillRole.None;
+            string n = (f.FieldName ?? string.Empty).ToLowerInvariant();
+            if (n.Contains("initial")) return FormFillRole.Initials;
+            if (n.Contains("signature") || n.Contains("sign")) return FormFillRole.Signature;
+            if (n.Contains("date")) return FormFillRole.Date;
+            return FormFillRole.None;
+        }
+
+        // A highlighted, clickable overlay sized to the field rectangle. Clicking fills it.
+        private UIElement BuildSignZone(FormFieldInfo f, bool initials, int pageIndex)
+        {
+            var accent = Color.FromRgb(0x2a, 0x6e, 0xa5);
+            var zone = new Border
+            {
+                Tag             = FormOverlayTag,
+                Width           = f.Cw,
+                Height          = f.Ch,
+                Background      = new SolidColorBrush(Color.FromArgb(38, accent.R, accent.G, accent.B)),
+                BorderBrush     = new SolidColorBrush(Color.FromArgb(190, accent.R, accent.G, accent.B)),
+                BorderThickness = new Thickness(1.4),
+                CornerRadius    = new CornerRadius(2),
+                Cursor          = Cursors.Hand,
+                ToolTip         = initials ? "Click to add your initials" : "Click to sign",
+                Child = new TextBlock
+                {
+                    Text                = initials ? "Initial" : "Sign",
+                    FontSize            = Math.Max(8, Math.Min(f.Ch * 0.45, 12)),
+                    FontWeight          = FontWeights.SemiBold,
+                    Foreground          = new SolidColorBrush(accent),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment   = VerticalAlignment.Center,
+                    IsHitTestVisible    = false,
+                },
+            };
+            double zx = f.Cx, zy = f.Cy, zw = f.Cw, zh = f.Ch; int zp = pageIndex, zo = f.ObjNum;
+            zone.MouseLeftButtonDown += (_, e) => { e.Handled = true; FillSignField(initials, zo, zp, zx, zy, zw, zh); };
+            return zone;
+        }
+
+        // Already signed -> change/remove menu. Otherwise drop the reusable choice, or open the
+        // picker the first time and route the pick back to this field.
+        private void FillSignField(bool initials, int objNum, int pageIndex, double x, double y, double w, double h)
+        {
+            if (_signedFields.ContainsKey(objNum))
+            {
+                ShowSignedFieldMenu(initials, objNum, pageIndex, x, y, w, h);
+                return;
+            }
+            var choice = initials ? _activeInitialsChoice : _activeSignatureChoice;
+            if (choice is null)
+            {
+                _pendingSignField = (initials, objNum, pageIndex, x, y, w, h);
+                ShowSignaturePopup();
+                SetStatus(initials
+                    ? "Choose initials - they will be reused for every initials field"
+                    : "Choose a signature - it will be reused for every signature field");
+                return;
+            }
+            DropSignatureInField(objNum, choice, pageIndex, x, y, w, h);
+        }
+
+        // Re-clicking a signed field: change (re-pick) or remove it.
+        private void ShowSignedFieldMenu(bool initials, int objNum, int pageIndex, double x, double y, double w, double h)
+        {
+            string what = initials ? "initials" : "signature";
+            var menu = new ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+            menu.Items.Add(MakeMenuItem("Change " + what, (_, _) =>
+            {
+                RemoveSignedField(objNum, pageIndex);
+                _pendingSignField = (initials, objNum, pageIndex, x, y, w, h);
+                ShowSignaturePopup();
+            }));
+            menu.Items.Add(MakeMenuItem("Remove " + what, (_, _) => RemoveSignedField(objNum, pageIndex)));
+            menu.IsOpen = true;
+        }
+
+        // Deletes the signature placed in a field and clears its signed state.
+        private void RemoveSignedField(int objNum, int pageIndex)
+        {
+            if (!_signedFields.TryGetValue(objNum, out var annot)) return;
+            if (_annotations.TryGetValue(pageIndex, out var list)) list.Remove(annot);
+            _signedFields.Remove(objNum);
+            RenderAllAnnotations(pageIndex);
+            MarkDirty(true);
+            SetStatus("Field cleared");
+        }
+
+        // Places a SignatureAnnotation centred in and scaled to fit the field rectangle.
+        private void DropSignatureInField(int objNum, SavedSignature sig, int pageIndex, double x, double y, double w, double h)
+        {
+            const double pad = 2;
+            double sw = sig.CanvasWidth, sh = sig.CanvasHeight;
+            double scale = Math.Min((w - 2 * pad) / sw, (h - 2 * pad) / sh);
+            if (scale <= 0) scale = Math.Min(w / sw, h / sh);
+            double drawW = sw * scale, drawH = sh * scale;
+            double px = x + (w - drawW) / 2;
+            double py = y + (h - drawH) / 2;
+
+            var annot = new SignatureAnnotation
+            {
+                PageIndex    = pageIndex,
+                Position     = new Point(px, py),
+                Scale        = scale,
+                StrokeWidth  = sig.StrokeWidth,
+                SourceWidth  = sw,
+                SourceHeight = sh,
+                ImageData    = sig.ImageData,
+            };
+            if (sig.ImageData is null)
+                foreach (var stroke in sig.Strokes)
+                    annot.Strokes.Add([.. stroke.Select(pt => new Point(pt.X, pt.Y))]);
+
+            _signedFields[objNum] = annot;
+            AddAnnotation(annot);
+            RenderAllAnnotations(pageIndex);
+            MarkDirty(true);
+            SetStatus("Field signed");
         }
 
         private void PlaceImageFromDialog(Point pos, int pageIdx)
@@ -9190,6 +9494,13 @@ namespace KillerPDF
                 ToggleSearchBar();
                 e.Handled = true;
             }
+            // TEMPORARY: Ctrl+Shift+F12 signs the currently-open PDF with the Desktop test cert.
+            // Remove before release (see Services/Signing/SigningSmokeTest.cs).
+            else if (e.Key == Key.F12 && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+            {
+                Services.Signing.SigningSmokeTest.RunOnFile(_currentFile);
+                e.Handled = true;
+            }
             else if (e.Key == Key.Enter && _currentTool == EditTool.Crop && _cropConfirmBar is not null)
             {
                 ApplyCrop([PageList.SelectedIndex]);
@@ -9547,7 +9858,7 @@ namespace KillerPDF
                                 var sigPoly = new Polyline
                                 {
                                     Stroke = Brushes.Black,
-                                    StrokeThickness = 2 * sa.Scale,
+                                    StrokeThickness = sa.StrokeWidth * sa.Scale,
                                     StrokeLineJoin = PenLineJoin.Round,
                                     StrokeStartLineCap = PenLineCap.Round,
                                     StrokeEndLineCap = PenLineCap.Round
@@ -9982,6 +10293,47 @@ namespace KillerPDF
                             MessageBoxButton.OK, MessageBoxImage.Warning);
                     });
                     item.ToolTip = path;
+
+                    // Header = filename then a small X right after it (kept tight - no right whitespace).
+                    var rmBtn = new Button
+                    {
+                        Content = "\ue711",
+                        FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                        FontSize = 9,
+                        Width = 18, Height = 18,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(0),
+                        Foreground = (SolidColorBrush)FindResource("TextSecondary"),
+                        Background = Brushes.Transparent,
+                        BorderThickness = new Thickness(0),
+                        Cursor = Cursors.Hand,
+                        Padding = new Thickness(0),
+                        Style = (Style)FindResource("ToolbarButton"),
+                        ToolTip = "Remove from list"
+                    };
+                    rmBtn.Click += (_, ev) =>
+                    {
+                        ev.Handled = true;
+                        App.RemoveRecentFile(path);
+                        menu.Items.Remove(item);   // drop just this row in place - no rebuild, no blink
+                        if (!menu.Items.OfType<MenuItem>().Any(mi => mi.Header is Grid))
+                            menu.IsOpen = false;   // nothing left to show
+                    };
+                    // Filename (fills) + X right-aligned. Trim the MenuItem's default 40px right padding
+                    // so the X sits near the edge instead of floating in whitespace.
+                    // Negative right margin overlaps the template's empty InputGestureText column
+                    // (it reserves ~24px), so the X lands near the real right edge instead of floating.
+                    var hdr = new Grid { Margin = new Thickness(0, 0, -24, 0) };
+                    hdr.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    hdr.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    var nameText = new TextBlock { Text = System.IO.Path.GetFileName(path), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+                    Grid.SetColumn(nameText, 0);
+                    Grid.SetColumn(rmBtn, 1);
+                    hdr.Children.Add(nameText);
+                    hdr.Children.Add(rmBtn);
+                    item.Header = hdr;
+                    item.Padding = new Thickness(20, 6, 8, 6);
+
                     menu.Items.Add(item);
                 }
                 menu.Items.Add(new Separator());
@@ -10128,11 +10480,25 @@ namespace KillerPDF
             {
                 menu.Items.Add(MakeMenuItem(Loc("Str_Menu_Save"), (_, _) => SaveInPlace(), "Ctrl+S"));
                 menu.Items.Add(MakeMenuItem(Loc("Str_Menu_SaveAs"), (s2, e2) => SaveAs_Click(s2, e2), "Ctrl+Shift+S"));
+                menu.Items.Add(new Separator());
+                // TODO localize "Digital Signature..." once the dialog is finalized.
+                menu.Items.Add(MakeMenuItem("Digital Signature...", (_, _) => OpenSignDialog()));
             }
 
             menu.PlacementTarget = (UIElement)sender;
             menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
             menu.IsOpen = true;
+        }
+
+        // Cryptographic certificate signing (the real digital signature, not the drawn stamp tool).
+        private void OpenSignDialog()
+        {
+            if (_doc is null || string.IsNullOrEmpty(_currentFile))
+            {
+                KillerDialog.Show(this, "Open a PDF first.");
+                return;
+            }
+            new SignDocumentDialog(this, _currentFile!).ShowDialog();
         }
 
         private void Merge_Click(object sender, RoutedEventArgs e)
@@ -11058,7 +11424,7 @@ namespace KillerPDF
                             }
                             else
                             {
-                                var sigPen = new XPen(XColors.Black, 2 * sa.Scale * sx)
+                                var sigPen = new XPen(XColors.Black, sa.StrokeWidth * sa.Scale * sx)
                                 {
                                     LineJoin = XLineJoin.Round,
                                     LineCap = XLineCap.Round
@@ -11476,6 +11842,13 @@ namespace KillerPDF
         private void ZoomBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_zoomBox?.SelectedItem is not ComboBoxItem item) return;
+            // Editable combos highlight the shown value after a pick (looks like selected text);
+            // collapse that selection to just the caret once the value settles.
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, (Action)(() =>
+            {
+                if (_zoomBox.Template?.FindName("PART_EditableTextBox", _zoomBox) is TextBox etb)
+                    etb.Select(etb.Text.Length, 0);
+            }));
             string? tag = item.Tag?.ToString();
             if (tag is null) return;
 
@@ -11966,6 +12339,16 @@ namespace KillerPDF
                     }
                     return;
                 }
+                // Two-page spreads pair (0,1),(2,3),...; clicking either page of the spread that's
+                // already shown (or re-selecting the current single page) renders the exact same pixels,
+                // so skip the re-render and its flash - just move the page number.
+                int targetPrimary = PageList.SelectedIndex;
+                if (_viewMode == ViewMode.TwoPage) targetPrimary -= targetPrimary % 2;
+                if (targetPrimary == _renderedPrimaryPage && Math.Abs(_zoomLevel - _lastRenderZoom) < 0.0001)
+                {
+                    _pageJumpBox.Text = (PageList.SelectedIndex + 1).ToString();
+                    return;
+                }
                 PagePreviewPanel.ScrollToTop();
                 PagePreviewPanel.ScrollToHorizontalOffset(0);
                 RenderPage(PageList.SelectedIndex);
@@ -12254,6 +12637,7 @@ namespace KillerPDF
         {
             if (_viewMode == mode) return;
             _viewMode = mode;
+            _renderedPrimaryPage = -1;   // spread/layout changes with the mode; force the next render
             _gridScrollToPage = -1;
             App.SetSetting("ViewMode", mode.ToString());
 

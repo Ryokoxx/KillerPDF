@@ -4,7 +4,7 @@ All notable changes to KillerPDF are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.5] - 2026-06-20
+## [1.5.6] - 2026-06-20
 
 ### Added
 - Strikethrough and underline annotation tools. Drag across text to mark it; each has its own color and opacity (shared bar with the highlighter) and flattens into the saved PDF.
@@ -21,7 +21,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 - Recent files: a dropdown arrow next to the Open button lists the last 10 PDFs (with a Clear option), and they're also shown on the start screen; a dropdown next to Save offers Save and Save As.
 - Tabbed documents. Open several PDFs at once, each in its own tab along a tab strip; switching tabs restores that document's page, zoom, and view mode. Opening a file (from the toolbar, Recent files, the command line, or the start screen) adds a tab instead of replacing what's open.
 - Sidebar placement (Settings -> Sidebar): put the page/outline sidebar on the left or right. The collapse toggle, the drag-to-resize splitter's divider line, and the Settings flyout all mirror to face the document, and the side is remembered between sessions.
-- Accent color variants for the Dark, Light, and Black (renamed from High Contrast) themes. Each base theme offers six accent hues - red, orange, green, teal, blue, purple - picked from colored circles in the Settings theme menu, matching the killertools.net swatches. Each theme remembers its own accent independently, and the choice persists between sessions.
+- Accent color variants for the Dark, Light, and Black (renamed from High Contrast) themes. Each base theme offers six accent hues - red, orange, green, teal, blue, purple - picked from colored circles in the Settings theme menu. Each theme remembers its own accent independently, and the choice persists between sessions.
 - Bengali (bn), Turkish (tr-TR), and Simplified Chinese (zh-CN) translations (contributors akib-h #79, mrantikadev #76, KaneLeung #82).
 
 ### Changed

@@ -401,6 +401,7 @@ namespace KillerPDF
             if (docTabs.Count < 2)
             {
                 TabStripBorder.Visibility = Visibility.Collapsed;
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)UpdateFooterFade);
                 return;
             }
 
@@ -409,6 +410,7 @@ namespace KillerPDF
                 TabStrip.Children.Add(BuildTabButton(t));
             TabStrip.Children.Add(BuildNewTabButton());
             UpdateTabStripFade();
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)UpdateFooterFade);
         }
 
         private FrameworkElement BuildTabButton(DocumentSession s)
@@ -504,22 +506,16 @@ namespace KillerPDF
             return bd;
         }
 
-        // Tab divider: a vertical bevel derived from the document-pane colour. Top is darker; the
-        // bottom is a shade lighter than BgCanvas. Rebuilt on theme change (OnThemeChanged).
+        // Tab divider: the document-pane border colour (PaneBorder) at the bottom, fading to fully
+        // transparent at the top - a subtle separator that matches the doc-pane line on every theme.
+        // Rebuilt on theme change (OnThemeChanged).
         private Brush MakeTabDividerBrush()
         {
-            Color canvas = (FindResource("BgCanvas") as SolidColorBrush)?.Color ?? Color.FromRgb(0x3a, 0x3a, 0x3a);
-            Color Shift(Color c, int d) => Color.FromRgb(
-                (byte)Math.Max(0, Math.Min(255, c.R + d)),
-                (byte)Math.Max(0, Math.Min(255, c.G + d)),
-                (byte)Math.Max(0, Math.Min(255, c.B + d)));
-            // Very dark panes (e.g. High Contrast pure-black canvas) need a much brighter bottom to
-            // read at all; lighter panes only want a touch.
-            double lum = 0.299 * canvas.R + 0.587 * canvas.G + 0.114 * canvas.B;
-            int bottomShift = lum < 24 ? 72 : 20;
+            Color pane = (FindResource("PaneBorder") as SolidColorBrush)?.Color ?? Color.FromRgb(0x2e, 0x2e, 0x2e);
             var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
-            brush.GradientStops.Add(new GradientStop(Shift(canvas, -28), 0.0));            // darker, top
-            brush.GradientStops.Add(new GradientStop(Shift(canvas, bottomShift), 1.0));    // lighter than pane, bottom
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, pane.R, pane.G, pane.B), 0.0));    // transparent, top
+            brush.GradientStops.Add(new GradientStop(Color.FromArgb(0, pane.R, pane.G, pane.B), 0.45));   // still transparent through the upper half
+            brush.GradientStops.Add(new GradientStop(pane, 1.0));                                         // PaneBorder, bottom
             return brush;
         }
 

@@ -117,6 +117,8 @@ namespace KillerPDF
     public class SignatureAnnotation : PlacedAnnotation
     {
         public List<List<Point>> Strokes { get; set; } = [];
+        /// <summary>Pen thickness (DIPs at source scale); multiplied by Scale when rendered.</summary>
+        public double StrokeWidth { get; set; } = 2.5;
         /// <summary>Base-64 encoded PNG. Non-null = image sig; null = drawn strokes.</summary>
         public string? ImageData { get; set; }
     }
@@ -142,10 +144,19 @@ namespace KillerPDF
     /// <summary>
     /// A saved signature stored in the user's AppData for reuse.
     /// </summary>
+    /// <summary>Distinguishes a full signature from a (smaller) initials stamp. Default is Signature
+    /// so signatures saved before this field existed still deserialize correctly.</summary>
+    public enum SignatureKind { Signature, Initials }
+
     public class SavedSignature
     {
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public string Name { get; set; } = "Signature";
+        /// <summary>Whether this is a full signature or an initials stamp. Drives which popup section
+        /// it appears in and the default placement scale.</summary>
+        public SignatureKind Kind { get; set; } = SignatureKind.Signature;
+        /// <summary>Pen thickness the signature was drawn with (DIPs at CanvasWidth/Height scale).</summary>
+        public double StrokeWidth { get; set; } = 2.5;
         public List<List<SerializablePoint>> Strokes { get; set; } = [];
         public double CanvasWidth { get; set; } = 400;
         public double CanvasHeight { get; set; } = 150;

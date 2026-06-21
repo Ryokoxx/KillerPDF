@@ -339,7 +339,7 @@
                                                     <Setter.Value>
                                                         <ControlTemplate TargetType="Thumb">
                                                             <Border x:Name="thumbBorder"
-                                                                    Background="{DynamicResource ScrollThumbHover}"
+                                                                    Background="{DynamicResource BgScrollThumb}"
                                                                     CornerRadius="3"
                                                                     Margin="4,0"/>
                                                             <ControlTemplate.Triggers>
@@ -350,10 +350,16 @@
                                                                 <!-- Fatten + highlight whenever the mouse is anywhere over the scrollbar.
                                                                      Only the thumb's margin changes, so the reserved width stays constant
                                                                      and the page does not reflow/re-render on hover. -->
-                                                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType={x:Type ScrollBar}}}" Value="True">
+                                                                <!-- Only react over the thumb itself, not anywhere along the track. -->
+                                                                <Trigger Property="IsMouseOver" Value="True">
                                                                     <Setter TargetName="thumbBorder" Property="Background" Value="{DynamicResource ScrollThumbHover}"/>
                                                                     <Setter TargetName="thumbBorder" Property="Margin" Value="2,2"/>
-                                                                </DataTrigger>
+                                                                    <Setter TargetName="thumbBorder" Property="Effect">
+                                                                        <Setter.Value>
+                                                                            <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="0" Opacity="0.3"/>
+                                                                        </Setter.Value>
+                                                                    </Setter>
+                                                                </Trigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
                                                     </Setter.Value>
@@ -878,7 +884,9 @@
     </Window.Resources>
 
     <Border x:Name="RootBorder" BorderBrush="{DynamicResource PaneBorder}" BorderThickness="1" Background="{DynamicResource BgDark}" CornerRadius="7">
-    <Grid x:Name="RootClipGrid">
+    <!-- Starts invisible; revealed (fade-in) only after the final shadow/fade positioning pass in
+         ContentRendered, so the unpositioned first frame (the "load deform") is never shown. -->
+    <Grid x:Name="RootClipGrid" Opacity="0">
         <Grid.RowDefinitions>
             <RowDefinition Height="36"/>     <!-- 0: title bar -->
             <RowDefinition Height="Auto"/>   <!-- 1: toolbar -->
@@ -1075,7 +1083,7 @@
         </Border>
 
         <!-- Main content -->
-        <Grid Grid.Row="3" x:Name="MainContentGrid">
+        <Grid Grid.Row="2" Grid.RowSpan="2" x:Name="MainContentGrid">
             <Grid.ColumnDefinitions>
                 <!-- The sidebar lives in column 0 (left, default) or column 2 (right). ApplySidebarSide
                      swaps which column is the sized sidebar (24-260px) and which is the star document
@@ -1086,11 +1094,15 @@
                 <ColumnDefinition Width="6"/>
                 <ColumnDefinition x:Name="DocCol" Width="*"/>
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>   <!-- row 0: tab strip (above the document only) -->
+                <RowDefinition Height="*"/>      <!-- row 1: sidebar / splitter / document -->
+            </Grid.RowDefinitions>
 
             <!-- Sidebar column: inner grid splits content from permanent toggle strip. The toggle
                  strip is kept on the side facing the document (right when the sidebar is on the
                  left, left when the sidebar is on the right) by ApplySidebarSide. -->
-            <Grid x:Name="SidebarOuterGrid" Grid.Column="0">
+            <Grid x:Name="SidebarOuterGrid" Grid.Column="0" Grid.Row="0" Grid.RowSpan="2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="SbContentCol" Width="*"/>   <!-- page list content -->
                     <ColumnDefinition x:Name="SbToggleCol" Width="24"/>   <!-- toggle strip — always visible -->
@@ -1335,6 +1347,7 @@
             <!-- Drag-to-resize splitter (only active in OUTLINES mode) -->
             <GridSplitter x:Name="SidebarSplitter"
                           Grid.Column="1"
+                          Grid.Row="1"
                           Width="6"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"
@@ -1378,7 +1391,7 @@
             <!-- Elevation shadow cast by the document onto the sidebar: pokes out of the splitter
                  handle (the 3-dot drag handle) onto the page list. ApplySidebarSide sets its side and
                  flips its direction. Black-alpha (reads on light/gray sidebars, subtle on near-black). -->
-            <Border x:Name="SidebarShadow" Grid.Column="1" IsHitTestVisible="False" Width="12"
+            <Border x:Name="SidebarShadow" Grid.Column="1" Grid.Row="1" IsHitTestVisible="False" Width="12"
                     HorizontalAlignment="Left" Margin="-12,0,0,0" Panel.ZIndex="50"
                     RenderTransformOrigin="0.5,0.5">
                 <Border.Background>
@@ -1398,8 +1411,23 @@
                 </Border.OpacityMask>
             </Border>
 
-            <!-- Preview area: 1px frame around the document pane -->
-            <Border x:Name="DocPaneBorder" Grid.Column="2" Background="{DynamicResource BgCanvas}"
+            <!-- Tab strip = the grainy "menubar" band for row 0. Its background + grain + fade span the
+                 splitter column AND the document column, so the band is one continuous grainy strip
+                 with no unpainted gap (the old "6x31 rectangle" was root background showing through the
+                 bare splitter column). The tabs sit on top, offset by TabScroll's margin to start at the
+                 document edge. ApplySidebarSide sets the start column / span / tab offset per side. -->
+            <Border Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="TabStripBorder"
+                    Background="{DynamicResource BgSidebar}" Visibility="Collapsed">
+                    <Grid>
+                        <Border IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
+                        <Border x:Name="TabStripFade" IsHitTestVisible="False" Background="{DynamicResource TabStripFadeBrush}"/>
+                        <ScrollViewer x:Name="TabScroll" Margin="6,0,0,0" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Hidden">
+                            <StackPanel x:Name="TabStrip" Orientation="Horizontal" Margin="1,0,6,0"/>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            <!-- Document pane: row 1 of the document column. -->
+            <Border Grid.Row="1" Grid.Column="2" x:Name="DocPaneBorder" Background="{DynamicResource BgCanvas}"
                     BorderBrush="{DynamicResource PaneBorder}" BorderThickness="1">
                 <Grid>
                     <!-- Film grain - sits on the canvas background, behind the document -->
@@ -1507,34 +1535,15 @@
                  doesn't cover the splitter column). They span the splitter + document columns;
                  ApplySidebarSide sets the start column for the sidebar side. Top = doc-pane border
                  colour; bottom = slider accent, which continues into the sidebar-facing stripe. -->
-            <Border x:Name="DocTopAccent" Grid.Column="1" Grid.ColumnSpan="2"
+            <Border x:Name="DocTopAccent" Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
                     Height="1" VerticalAlignment="Top" IsHitTestVisible="False" Panel.ZIndex="60"
                     Background="{DynamicResource PaneBorder}"/>
-            <Border x:Name="DocBottomAccent" Grid.Column="1" Grid.ColumnSpan="2"
+            <Border x:Name="DocBottomAccent" Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
                     Height="1" VerticalAlignment="Bottom" IsHitTestVisible="False" Panel.ZIndex="60"
                     Background="{DynamicResource DragLine}"/>
         </Grid>
 
         <!-- Status bar -->
-        <!-- Document tab strip: one tab per open PDF, directly below the toolbar. Built in
-             code-behind (RebuildTabStrip) so it tracks theme changes; hidden when nothing is open.
-             The floating annotation bar sits at the top of the document pane (row 3), so it now
-             emerges just below this strip. -->
-        <Border Grid.Row="2" x:Name="TabStripBorder" Background="{DynamicResource BgSidebar}"
-                Visibility="Collapsed">
-            <Grid>
-                <Border IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
-                <!-- Shadow gradient over the empty strip area: transparent at top, darkening toward the
-                     document below. Per-theme brush (lighter in Light). Sits behind the (opaque) tabs,
-                     and UpdateTabStripFade clips its width to the document column so it never falls over
-                     the sidebar. -->
-                <Border x:Name="TabStripFade" IsHitTestVisible="False" Background="{DynamicResource TabStripFadeBrush}"/>
-                <ScrollViewer VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Hidden">
-                    <StackPanel x:Name="TabStrip" Orientation="Horizontal" Margin="6,0,6,0"/>
-                </ScrollViewer>
-            </Grid>
-        </Border>
-
         <Border Grid.Row="4" x:Name="FooterBorder" Background="{DynamicResource BgSidebar}" CornerRadius="0,0,7,7">
             <Grid>
             <Border IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
@@ -1590,7 +1599,7 @@
                     </Button>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <TextBlock x:Name="VersionLabel" Text="v1.5.5"
+                    <TextBlock x:Name="VersionLabel" Text="v1.5.6"
                                Foreground="{DynamicResource TextFooter}" FontFamily="Consolas"
                                FontSize="10" VerticalAlignment="Center" Margin="0,0,12,0"
                                Cursor="Hand" ToolTip="{DynamicResource Str_TT_About}"

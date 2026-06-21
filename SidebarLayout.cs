@@ -18,7 +18,9 @@ namespace KillerPDF
             var sbOuter       = FindName("SidebarOuterGrid") as Grid;
             var sbContent     = FindName("SidebarBorder") as Border;
             var sbToggle      = FindName("SidebarToggleStrip") as Border;
-            var docPane       = FindName("DocPaneBorder") as Border;
+            var docPane       = FindName("DocPaneBorder") as FrameworkElement;
+            var tabStrip      = FindName("TabStripBorder") as FrameworkElement;
+            var tabScroll     = FindName("TabScroll") as FrameworkElement;
             var sbContentCol  = FindName("SbContentCol") as ColumnDefinition;
             var sbToggleCol   = FindName("SbToggleCol") as ColumnDefinition;
             if (sidebarColDef == null || docColDef == null || sbOuter == null || sbContent == null ||
@@ -40,6 +42,10 @@ namespace KillerPDF
                 docColDef.Width = new GridLength(1, GridUnitType.Star);
                 Grid.SetColumn(sbOuter, 0);
                 Grid.SetColumn(docPane, 2);
+                // Grainy tab band spans the splitter column (1) + document column (2) so it's one
+                // continuous strip; the 6px tab offset cancels the wider band so tabs don't move.
+                if (tabStrip != null) { Grid.SetColumn(tabStrip, 1); Grid.SetColumnSpan(tabStrip, 2); }
+                if (tabScroll != null) tabScroll.Margin = new Thickness(6, 0, 0, 0);
                 _sidebarCol = sidebarColDef;
                 // Toggle strip faces the document: right edge of the sidebar.
                 sbContentCol.Width = new GridLength(1, GridUnitType.Star);
@@ -55,6 +61,10 @@ namespace KillerPDF
                 sidebarColDef.Width = new GridLength(1, GridUnitType.Star);
                 Grid.SetColumn(sbOuter, 2);
                 Grid.SetColumn(docPane, 0);
+                // Band spans document column (0) + splitter column (1); tabs sit at the document edge
+                // (col 0) with no offset, and the band extends right over the gap to the sidebar.
+                if (tabStrip != null) { Grid.SetColumn(tabStrip, 0); Grid.SetColumnSpan(tabStrip, 2); }
+                if (tabScroll != null) tabScroll.Margin = new Thickness(0, 0, 0, 0);
                 _sidebarCol = docColDef;
                 // Toggle strip faces the document: left edge of the sidebar (inner column 0). The
                 // inner column defs are fixed in position, so size them by position, not by name.
@@ -97,48 +107,82 @@ namespace KillerPDF
             UpdateSidebarToggleGlyph();
             ApplySettingsPanelSide();
             UpdateTabStripFade();
+            // The column swap repositions the document pane; re-anchor the footer shadow once layout
+            // settles (TransformToVisual needs the final positions).
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)UpdateFooterFade);
         }
+
 
         // Clip the tab-strip shadow gradient to the document column so it never falls over the
         // sidebar (on whichever side the sidebar sits).
         private void UpdateTabStripFade()
         {
-            double edge = (_sidebarCol?.ActualWidth ?? 180) + 6;   // sidebar column + 6px splitter
-            var m = _sidebarRight ? new Thickness(0, 0, edge, 0) : new Thickness(edge, 0, 0, 0);
-            if (TabStripFade != null) TabStripFade.Margin = m;
-            if (FooterFade != null) FooterFade.Margin = m;   // mirrored shadow below the document
-            ApplyTabFadeFeather();
+            // The tab-strip gradient band spans the splitter column + document column. Feather its
+            // sidebar-facing edge (the same fixed-offset OpacityMask the footer uses) so it blends into
+            // the sidebar instead of ending in a hard vertical cut. The document-facing edge keeps its
+            // hard stop - that one is the tab/window edge and is meant to be crisp.
+            if (TabStripFade != null)
+            {
+                TabStripFade.Margin = new Thickness(0);
+                double w = TabStripFade.ActualWidth;
+                if (w > 0)
+                {
+                    double f = Math.Min(0.4, 15.0 / w);   // ~15px feather, matches the footer corner
+                    var mask = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
+                    if (_sidebarRight)
+                    {
+                        mask.GradientStops.Add(new GradientStop(Colors.White, 0));
+                        mask.GradientStops.Add(new GradientStop(Colors.White, 1 - f));
+                        mask.GradientStops.Add(new GradientStop(Colors.Transparent, 1));
+                    }
+                    else
+                    {
+                        mask.GradientStops.Add(new GradientStop(Colors.Transparent, 0));
+                        mask.GradientStops.Add(new GradientStop(Colors.White, f));
+                        mask.GradientStops.Add(new GradientStop(Colors.White, 1));
+                    }
+                    TabStripFade.OpacityMask = mask;
+                }
+                else TabStripFade.OpacityMask = null;
+            }
+            UpdateFooterFade();
         }
 
-        private void ApplyTabFadeFeather()
+        // ROOT-CAUSE FIX for the recurring footer-shadow disappearance: position the footer shadow by
+        // reading the DOCUMENT PANE's real on-screen position/width, not the sidebar width. The old code
+        // clipped via _sidebarCol.ActualWidth and feathered via the fade's own ActualWidth - both read
+        // mid-layout, so any shuffle (resize, toggle, restructure) left it mis-clipped and uncorrected.
+        // Anchoring directly to the document is deterministic and self-corrects on every layout change.
+        private void UpdateFooterFade()
         {
-            FeatherFade(TabStripFade);
-            FeatherFade(FooterFade);
-        }
-
-        // Soften the sidebar-facing edge of a shadow gradient so it fades out over ~20px instead of
-        // ending in a hard vertical line. (The footer fade is flipped vertically, but this horizontal
-        // mask is applied before that transform, so the same logic works for both.)
-        private void FeatherFade(Border? fade)
-        {
-            if (fade == null) return;
-            double w = fade.ActualWidth;
-            if (w <= 1) { fade.OpacityMask = null; return; }
-            double f = Math.Max(0.02, Math.Min(0.4, 20.0 / w));
-            var mask = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
-            if (_sidebarRight)
+            if (FooterFade is null) return;
+            if (FindName("DocPaneBorder") is not FrameworkElement doc) return;
+            if (FindName("FooterBorder") is not FrameworkElement footer) return;
+            if (doc.ActualWidth <= 0 || footer.ActualWidth <= 0) return;
+            try
             {
-                mask.GradientStops.Add(new GradientStop(Colors.White, 0));
-                mask.GradientStops.Add(new GradientStop(Colors.White, 1 - f));
-                mask.GradientStops.Add(new GradientStop(Colors.Transparent, 1));
+                double left  = doc.TransformToVisual(footer).Transform(new Point(0, 0)).X;
+                double right = footer.ActualWidth - left - doc.ActualWidth;
+                FooterFade.Margin = new Thickness(Math.Max(0, left), 0, Math.Max(0, right), 0);
+                // Soft, FIXED-offset feather on the sidebar-facing edge (relative to the element, so it
+                // can't go stale on width changes) - removes the hard vertical corner of the gradient.
+                double f = Math.Min(0.4, 15.0 / doc.ActualWidth);   // ~15px feather regardless of width, so it reaches the corner
+                var mask = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
+                if (_sidebarRight)
+                {
+                    mask.GradientStops.Add(new GradientStop(Colors.White, 0));
+                    mask.GradientStops.Add(new GradientStop(Colors.White, 1 - f));
+                    mask.GradientStops.Add(new GradientStop(Colors.Transparent, 1));
+                }
+                else
+                {
+                    mask.GradientStops.Add(new GradientStop(Colors.Transparent, 0));
+                    mask.GradientStops.Add(new GradientStop(Colors.White, f));
+                    mask.GradientStops.Add(new GradientStop(Colors.White, 1));
+                }
+                FooterFade.OpacityMask = mask;
             }
-            else
-            {
-                mask.GradientStops.Add(new GradientStop(Colors.Transparent, 0));
-                mask.GradientStops.Add(new GradientStop(Colors.White, f));
-                mask.GradientStops.Add(new GradientStop(Colors.White, 1));
-            }
-            fade.OpacityMask = mask;
+            catch { /* not laid out yet - a later layout pass will retry */ }
         }
 
         // The collapse arrow points toward where the page-list content goes when toggled, which

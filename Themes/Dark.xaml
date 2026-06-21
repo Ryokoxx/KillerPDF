@@ -24,7 +24,7 @@
     <SolidColorBrush x:Key="InstallBtnBg"   Color="#1ea54c" po:Freeze="True"/>
     <SolidColorBrush x:Key="AccentBorder"   Color="#404040" po:Freeze="True"/>
     <SolidColorBrush x:Key="DropBorder"     Color="#303030" po:Freeze="True"/>
-    <SolidColorBrush x:Key="PaneBorder"     Color="#404040" po:Freeze="True"/>
+    <SolidColorBrush x:Key="PaneBorder"     Color="#2e2e2e" po:Freeze="True"/>
     <SolidColorBrush x:Key="AccentDim"      Color="#0d2a18" po:Freeze="True"/>
     <SolidColorBrush x:Key="SelectionBg" Color="#1c5e38" po:Freeze="True"/>
     <SolidColorBrush x:Key="SelectionFg" Color="#ffffff" po:Freeze="True"/>

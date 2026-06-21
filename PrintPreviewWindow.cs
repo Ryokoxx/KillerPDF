@@ -79,8 +79,8 @@ namespace KillerPDF
             _pageDipH = pageDipH;
 
             Title  = "KillerPDF - Print";
-            Width  = 920;
-            Height = 700;
+            Width  = 936;
+            Height = 716;
             MinWidth  = 720;
             MinHeight = 480;
             WindowStyle           = WindowStyle.None;
@@ -375,14 +375,17 @@ namespace KillerPDF
                 BorderBrush     = R("BorderDim"),
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(7),
-                Margin          = new Thickness(12),    // halo so the (stronger) drop shadow can render
+                // Halo must be >= BlurRadius + ShadowDepth or the window edge clips the shadow into a
+                // thin hard line (invisible as a soft halo on light backgrounds). Recipe matches the
+                // in-app card shadow so every dialog casts the same soft shadow on any background.
+                Margin          = new Thickness(20),
                 Effect          = new System.Windows.Media.Effects.DropShadowEffect
                 {
                     Color       = Colors.Black,
-                    BlurRadius  = 18,
+                    BlurRadius  = 16,
                     ShadowDepth = 3,
                     Direction   = 270,
-                    Opacity     = 0.6
+                    Opacity     = 0.55
                 }
             };
             var root = new DockPanel();
