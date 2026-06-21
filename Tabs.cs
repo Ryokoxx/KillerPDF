@@ -24,6 +24,9 @@ namespace KillerPDF
             public PdfDocument? Doc;
             public string? CurrentFile;
             public string? OriginalFile;
+            // Set on a restored tab that hasn't been loaded yet (lazy tabs): Doc stays null until the
+            // user first switches to it, so startup doesn't render every reopened PDF.
+            public string? DeferredPath;
 
             public double ZoomLevel = 1.0;
             public double LastRenderZoom = 1.0;
@@ -215,9 +218,9 @@ namespace KillerPDF
             if (_active != null) CaptureSessionState(_active);
 
             DocumentSession target;
-            if (_active != null && _active.Doc == null)
+            if (_active != null && _active.Doc == null && _active.DeferredPath == null)
             {
-                target = _active;          // reuse the current empty tab
+                target = _active;          // reuse the current empty tab (never a deferred one)
                 createdNew = false;
             }
             else
@@ -250,7 +253,7 @@ namespace KillerPDF
             string full;
             try { full = System.IO.Path.GetFullPath(path); } catch { full = path; }
             return _sessions.FirstOrDefault(s =>
-                s.Doc != null &&
+                (s.Doc != null || s.DeferredPath != null) &&
                 !string.IsNullOrEmpty(s.OriginalFile) &&
                 string.Equals(SafeFullPath(s.OriginalFile!), full, StringComparison.OrdinalIgnoreCase));
         }
@@ -280,6 +283,9 @@ namespace KillerPDF
             OpenFile(path);
             if (_doc == null)
             {
+                // A background open (encryption strip / repair) finalizes this tab itself, so the
+                // not-yet-loaded _doc isn't a failure - leave the tab in place.
+                if (_asyncOpenPending) return;
                 // Open failed, was cancelled, or a password prompt was dismissed.
                 AbortTabLoad(target, prev, createdNew);
                 return;
@@ -292,7 +298,7 @@ namespace KillerPDF
         // Cycle to the next (dir = +1) or previous (dir = -1) open document tab.
         private void CycleTab(int dir)
         {
-            var docTabs = _sessions.Where(t => t.Doc != null).ToList();
+            var docTabs = _sessions.Where(t => t.Doc != null || t.DeferredPath != null).ToList();
             if (docTabs.Count < 2 || _active == null) return;
             int i = docTabs.IndexOf(_active);
             if (i < 0) return;
@@ -309,8 +315,29 @@ namespace KillerPDF
             if (_active != null) CaptureSessionState(_active);
             _active = target;
             ApplySessionState(target);
-            RenderActiveSession();
+            if (target.Doc == null && target.DeferredPath != null) MaterializeDeferred(target);
+            else RenderActiveSession();
             RebuildTabStrip();
+        }
+
+        // Load a restored-but-deferred tab's PDF the first time it is viewed (lazy tabs). The session
+        // must already be the live working set (ApplySessionState called) before this runs.
+        private void MaterializeDeferred(DocumentSession target)
+        {
+            var path = target.DeferredPath;
+            target.DeferredPath = null;
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
+            {
+                RenderActiveSession();        // file vanished since last session - show the empty state
+                return;
+            }
+            OpenFile(path!);                  // loads into the live fields and renders the view
+            if (_doc == null)
+            {
+                if (_asyncOpenPending) return;   // background strip/repair finalizes the tab itself
+                RenderActiveSession(); return;
+            }
+            CaptureSessionState(target);      // persist the now-loaded document back into the session
         }
 
         // Close a tab. Prompts to save if that tab has unsaved changes, then switches to a
@@ -364,7 +391,8 @@ namespace KillerPDF
                 var next = _sessions[Math.Min(idx, _sessions.Count - 1)];
                 _active = next;
                 ApplySessionState(next);
-                RenderActiveSession();
+                if (next.Doc == null && next.DeferredPath != null) MaterializeDeferred(next);
+                else RenderActiveSession();
             }
             RebuildTabStrip();
         }
@@ -395,7 +423,7 @@ namespace KillerPDF
             if (TabStrip == null || TabStripBorder == null) return;
             TabStrip.Children.Clear();
 
-            var docTabs = _sessions.Where(t => t.Doc != null).ToList();
+            var docTabs = _sessions.Where(t => t.Doc != null || t.DeferredPath != null).ToList();
             // Only show the strip once there's more than one document - a single open PDF
             // doesn't need a tab bar.
             if (docTabs.Count < 2)

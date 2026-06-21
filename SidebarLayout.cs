@@ -37,7 +37,7 @@ namespace KillerPDF
             if (!_sidebarRight)
             {
                 // Sidebar on the LEFT (column 0); document fills column 2.
-                sidebarColDef.MinWidth = 24; sidebarColDef.MaxWidth = maxW; sidebarColDef.Width = sized;
+                sidebarColDef.MinWidth = _sidebarCollapsed ? 24 : SidebarMinOpen; sidebarColDef.MaxWidth = maxW; sidebarColDef.Width = sized;
                 docColDef.MinWidth = 0; docColDef.MaxWidth = double.PositiveInfinity;
                 docColDef.Width = new GridLength(1, GridUnitType.Star);
                 Grid.SetColumn(sbOuter, 0);
@@ -56,7 +56,7 @@ namespace KillerPDF
             else
             {
                 // Sidebar on the RIGHT (column 2); document fills column 0.
-                docColDef.MinWidth = 24; docColDef.MaxWidth = maxW; docColDef.Width = sized;
+                docColDef.MinWidth = _sidebarCollapsed ? 24 : SidebarMinOpen; docColDef.MaxWidth = maxW; docColDef.Width = sized;
                 sidebarColDef.MinWidth = 0; sidebarColDef.MaxWidth = double.PositiveInfinity;
                 sidebarColDef.Width = new GridLength(1, GridUnitType.Star);
                 Grid.SetColumn(sbOuter, 2);
@@ -103,6 +103,10 @@ namespace KillerPDF
             int accentStartCol = _sidebarRight ? 0 : 1;
             foreach (var n in new[] { "DocTopAccent", "DocBottomAccent" })
                 if (FindName(n) is Border accentLine) System.Windows.Controls.Grid.SetColumn(accentLine, accentStartCol);
+            // The top accent (pane-border colour) bled 1px into the sidebar; inset its sidebar-facing
+            // edge by 1px so it stops exactly at the splitter instead of overhanging the list.
+            if (FindName("DocTopAccent") is Border topAccent)
+                topAccent.Margin = _sidebarRight ? new Thickness(0, 0, 1, 0) : new Thickness(1, 0, 0, 0);
 
             UpdateSidebarToggleGlyph();
             ApplySettingsPanelSide();
@@ -156,8 +160,9 @@ namespace KillerPDF
         private void UpdateFooterFade()
         {
             if (FooterFade is null) return;
-            if (FindName("DocPaneBorder") is not FrameworkElement doc) return;
-            if (FindName("FooterBorder") is not FrameworkElement footer) return;
+            // Direct generated x:Name fields instead of FindName - this runs on every resize tick.
+            if (DocPaneBorder is not FrameworkElement doc) return;
+            if (FooterBorder is not FrameworkElement footer) return;
             if (doc.ActualWidth <= 0 || footer.ActualWidth <= 0) return;
             try
             {

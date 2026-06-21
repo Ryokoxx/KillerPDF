@@ -288,6 +288,15 @@ namespace KillerPDF
             // tab strip, which shifts the document) changes size.
             DocPaneBorder.SizeChanged += (_, _) => UpdateFooterFade();
             TabStripBorder.SizeChanged += (_, _) => UpdateTabStripFade();
+            // After a sidebar-splitter drag, snap fully closed if dragged too narrow, else save the width.
+            SidebarSplitter.PreviewMouseLeftButtonUp += (_, _) => OnSidebarResized();
+            // Grabbing the splitter while collapsed reveals the page list so it can be pulled open.
+            SidebarSplitter.PreviewMouseLeftButtonDown += (_, _) => { _sidebarWantClose = false; OnSidebarSplitterPress(); };
+            // Pull the splitter well past the minimum mid-drag to close (the column itself can't clip).
+            SidebarSplitter.PreviewMouseMove += OnSidebarSplitterMove;
+            // If a drag is interrupted (alt-tab, focus loss, taking a screenshot), finalize it so the
+            // sidebar can't get stuck half-open with its content hidden.
+            SidebarSplitter.LostMouseCapture += (_, _) => OnSidebarResized();
             if (Enum.TryParse<ViewMode>(App.GetSetting("ViewMode"), out var savedVm))
                 _viewMode = savedVm;
             if (Enum.TryParse<ToolbarStyle>(App.GetSetting("ToolbarStyle"), out var savedTb))
@@ -300,8 +309,9 @@ namespace KillerPDF
             BuildContextMenu();
             SetTool(EditTool.Select);
             ApplyGrainTexture();
+            ApplyToolNumberTooltips();   // append the 1-9 toolbar positions to the tool tooltips
             SourceInitialized += MainWindow_SourceInitialized;
-            Closed += (_, _) => { _doc?.Close(); App.CleanupSessionTemps(); };
+            Closed += (_, _) => { _continuousRenderCts?.Cancel(); _doc?.Close(); App.CleanupSessionTemps(); };
 
             // Open a file passed via command-line / file association (e.g. double-clicking a .pdf)
             // Also show the portable badge when running outside the install location.
@@ -349,19 +359,35 @@ namespace KillerPDF
                     var paths = !string.IsNullOrEmpty(saved)
                         ? saved!.Split('|')
                         : (App.GetSetting("LastFile") is { Length: > 0 } lf ? new[] { lf } : System.Array.Empty<string>());
+                    // Lazy restore: create a placeholder tab for each saved file but load only the
+                    // focused one. The rest materialize (load + render) the first time they're clicked,
+                    // so startup cost no longer scales with how many tabs were open last session.
+                    _sessions.Clear();
                     bool openedAny = false;
                     foreach (var f in paths)
-                        if (!string.IsNullOrEmpty(f) && System.IO.File.Exists(f)) { OpenInNewTab(f); openedAny = true; }
+                        if (!string.IsNullOrEmpty(f) && System.IO.File.Exists(f))
+                        {
+                            _sessions.Add(new DocumentSession { OriginalFile = f, CurrentFile = f, DeferredPath = f });
+                            openedAny = true;
+                        }
                     if (!openedAny)
                     {
+                        _active = null;
                         PopulateRecentFilesList();   // empty state: show the recent list
                         EnsureInitialSession();
                         RebuildTabStrip();
                     }
-                    else if (App.GetSetting("ActiveTab") is { Length: > 0 } wantActive
-                             && _sessions.FirstOrDefault(ss => string.Equals(ss.OriginalFile, wantActive, StringComparison.OrdinalIgnoreCase)) is { } activeTarget)
+                    else
                     {
-                        SwitchToTab(activeTarget);   // restore which tab was focused
+                        var wantActive = App.GetSetting("ActiveTab");
+                        var activeTarget = (!string.IsNullOrEmpty(wantActive)
+                                ? _sessions.FirstOrDefault(ss => string.Equals(ss.OriginalFile, wantActive, StringComparison.OrdinalIgnoreCase))
+                                : null)
+                            ?? _sessions[0];
+                        _active = activeTarget;
+                        ApplySessionState(activeTarget);
+                        MaterializeDeferred(activeTarget);   // load + render only the focused tab
+                        RebuildTabStrip();
                     }
                 }
 
@@ -770,6 +796,7 @@ namespace KillerPDF
         private void SelectLocale(KillerPDF.Services.Locale loc)
         {
             KillerPDF.Services.LocaleManager.Apply(loc);
+            ApplyToolNumberTooltips();   // re-append the numbers to the now-localized tool tooltips
             LangCurrentLabel.Text = LangDisplayName(loc);
             // The Theme and Toolbar picker labels are set imperatively (not DynamicResource), so the
             // language switch happening while the panel is open would leave them in the old language.
@@ -1748,6 +1775,11 @@ namespace KillerPDF
         // File operations
         // ============================================================
 
+        // True while an open is finishing on a background thread (encryption strip / repair). The
+        // synchronous open callers check this so they don't treat the not-yet-loaded _doc as a failure;
+        // the background path finalizes the tab itself via FinalizeAsyncOpen.
+        private bool _asyncOpenPending;
+
         private void OpenFile(string path)
         {
             // Record real user files in the recent list (skips blank/new docs, which don't open a path).
@@ -1778,17 +1810,13 @@ namespace KillerPDF
                 // Strip encryption silently at open time via Import so all edits work correctly.
                 if (PdfFileHasEncryption(srcPath))
                 {
-                    // PdfSharp can read encrypted PDFs but cannot re-save them once modified.
-                    // Strip encryption now via PDFium (lossless), falling back to Import mode.
-                    _doc.Close(); _doc = null;
-                    var repairedPath = App.MakeTempFile("repaired");
-                    bool ok = TryPdfiumStripEncryption(srcPath, repairedPath)
-                           || TryImportRepairToPath(srcPath, repairedPath);
-                    if (!ok) { TryRepairAndOpen(srcPath); return; }
-                    _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
-                    _currentFile = repairedPath;
-                    FinishOpenFile(path, repairedPath);
-                    MarkDirty(true);
+                    // PdfSharp can read encrypted PDFs but cannot re-save them once modified, so the
+                    // encryption is stripped (PDFium, lossless; Import fallback). That strip is CPU-heavy,
+                    // so it runs off-thread behind the busy overlay instead of freezing the window. The
+                    // background path finalizes the tab itself, so the flag tells the synchronous caller
+                    // not to treat the not-yet-set _doc as a failed open.
+                    _asyncOpenPending = true;
+                    StripEncryptionAndOpen(srcPath, path, busyMessage: "Opening protected PDF...");
                     return;
                 }
                 _currentFile = srcPath;
@@ -1859,34 +1887,23 @@ namespace KillerPDF
             }
             catch (Exception ex) when (IsEofParseException(ex))
             {
-                // PdfSharpCore rejects some structurally-valid PDFs with "Unexpected EOF" even
-                // though PDFium (and every common viewer) reads them fine. Re-save the file
-                // losslessly through PDFium to a clean temp and open that; fall back to an
-                // import repair, then to a rasterize repair as a last resort.
-                try
-                {
-                    if (_doc is not null) { _doc.Close(); _doc = null; }
-                    var repairedPath = App.MakeTempFile("repaired");
-                    bool ok = TryPdfiumStripEncryption(srcPath, repairedPath)
-                           || TryImportRepairToPath(srcPath, repairedPath);
-                    if (!ok) { TryRepairAndOpen(srcPath); return; }
-                    _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
-                    _currentFile = repairedPath;
-                    FinishOpenFile(path, repairedPath);
-                    // Open clean: the normalized copy is content-equivalent, so a view-only open
-                    // should not nag to save. _currentFile points at the temp and _originalFile at
-                    // the user's path, so the original is only ever overwritten if they choose to
-                    // Save after making edits (FinishOpenFile already cleared the dirty flag).
-                    SetStatus($"Opened {System.IO.Path.GetFileName(path)} ({_doc.PageCount} pages) - recovered via PDFium.");
-                }
-                catch (Exception ex2)
-                {
-                    KillerDialog.Show(this, string.Format(Loc("Str_Dlg_FailedOpen"), ex2.Message), Loc("Str_Dlg_AppTitle"), MessageBoxButton.OK, MessageBoxImage.Error);
-                }
+                // PdfSharpCore rejects some structurally-valid PDFs with "Unexpected EOF" even though
+                // PDFium (and every common viewer) reads them fine. Re-save losslessly through PDFium on
+                // a background thread (so the window doesn't freeze). The recovered copy is content-
+                // equivalent, so it opens clean without nagging to save (markDirty: false).
+                _asyncOpenPending = true;
+                StripEncryptionAndOpen(srcPath, path, markDirty: false);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                KillerDialog.Show(this, string.Format(Loc("Str_Dlg_FailedOpen"), ex.Message), Loc("Str_Dlg_AppTitle"), MessageBoxButton.OK, MessageBoxImage.Error);
+                // Any other open failure (truncated file, malformed objects, an out-of-range parse, etc.):
+                // we can't classify the damage, but the PDFium-based repair often recovers it anyway, so
+                // offer the repair rather than just failing outright.
+                var result = KillerDialog.Show(this,
+                    "This PDF couldn't be opened - its structure may be damaged.\n\nWould you like KillerPDF to attempt a repair? A repaired copy will be created - the original file will not be changed.\n\nNote: repaired files may be missing bookmarks, forms, and other interactive features.",
+                    "KillerPDF", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (result == MessageBoxResult.Yes)
+                    TryRepairAndOpen(srcPath);   // sets _asyncOpenPending and finalizes the tab itself
             }
         }
 
@@ -2155,6 +2172,7 @@ namespace KillerPDF
             // Repair is CPU/IO heavy, so it runs on a background thread behind a spinner overlay -
             // otherwise the window froze (hourglass, no feedback) for the whole repair. Only the
             // file production runs off-thread; opening/rendering the result stays on the UI thread.
+            _asyncOpenPending = true;   // the synchronous open caller defers tab finalization to here
             var busy = ShowBusyOverlay("Repairing PDF...");
             try
             {
@@ -2181,6 +2199,7 @@ namespace KillerPDF
                 if (repairedPath is null)
                 {
                     HideBusyOverlay(busy);
+                    _asyncOpenPending = false;
                     KillerDialog.Show(this,
                         "Repair failed - the file is too severely damaged to recover.\n\nTry opening the original in a different application (Adobe Acrobat, browsers) which may have additional recovery options.",
                         "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -2195,6 +2214,7 @@ namespace KillerPDF
                 SetStatus(string.Format(Loc(raster ? "Str_OpenedRasterRepair" : "Str_OpenedRepaired"),
                                         System.IO.Path.GetFileName(path), _doc.PageCount));
                 HideBusyOverlay(busy);
+                FinalizeAsyncOpen();
                 KillerDialog.Show(this,
                     raster
                         ? $"\"{System.IO.Path.GetFileName(path)}\" was repaired by rasterizing through PDFium.\n\nText is not selectable in the repaired copy. Use Save As to write it to a new location."
@@ -2204,9 +2224,55 @@ namespace KillerPDF
             catch (Exception ex)
             {
                 HideBusyOverlay(busy);
+                _asyncOpenPending = false;
                 KillerDialog.Show(this, $"Repair failed:\n{ex.Message}", "KillerPDF",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        // Strips a PDF's encryption on a background thread (so the window doesn't freeze), then opens the
+        // clean copy. Mirrors TryRepairAndOpen; finalizes the tab via FinalizeAsyncOpen.
+        private async void StripEncryptionAndOpen(string srcPath, string displayPath, bool markDirty = true, string busyMessage = "Opening PDF...")
+        {
+            _asyncOpenPending = true;
+            var busy = ShowBusyOverlay(busyMessage);
+            try
+            {
+                if (_doc is not null) { _doc.Close(); _doc = null; }
+                var repairedPath = App.MakeTempFile("repaired");
+                bool ok = await System.Threading.Tasks.Task.Run(() =>
+                    TryPdfiumStripEncryption(srcPath, repairedPath) || TryImportRepairToPath(srcPath, repairedPath));
+                if (!ok)
+                {
+                    HideBusyOverlay(busy);
+                    TryRepairAndOpen(srcPath);   // keeps _asyncOpenPending set; repair finalizes the tab
+                    return;
+                }
+                _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
+                _currentFile = repairedPath;
+                FinishOpenFile(displayPath, repairedPath);
+                if (markDirty) MarkDirty(true);   // stripped copy lives in temp - user must Save As to keep it
+                HideBusyOverlay(busy);
+                FinalizeAsyncOpen();
+            }
+            catch (Exception ex)
+            {
+                HideBusyOverlay(busy);
+                _asyncOpenPending = false;
+                KillerDialog.Show(this, $"Could not open the protected PDF:\n{ex.Message}",
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        // Finalizes a background open (encryption strip / repair) once the document is loaded on the UI
+        // thread: stores it into the active tab session and refreshes the tool + tab strip. Mirrors the
+        // tail of OpenInNewTab, which is skipped while _asyncOpenPending is set.
+        private void FinalizeAsyncOpen()
+        {
+            _asyncOpenPending = false;
+            if (_active != null) CaptureSessionState(_active);
+            SetTool(_currentTool);
+            RebuildTabStrip();
         }
 
         /// <summary>
@@ -4279,19 +4345,106 @@ namespace KillerPDF
                 _sidebarBorder.Visibility = Visibility.Collapsed;
                 _sidebarCol.Width = new GridLength(24);
                 _sidebarCol.MinWidth = 24;
+                // Splitter stays enabled so the user can grab it and drag the sidebar back open.
             }
             else
             {
                 _sidebarBorder.Visibility = Visibility.Visible;
                 double restore = _sidebarShowingOutlines ? _savedOutlinesWidth : _savedPagesWidth;
                 _sidebarCol.Width = new GridLength(restore);
-                _sidebarCol.MinWidth = 24;
+                _sidebarCol.MinWidth = SidebarMinOpen;   // open: clamp so the list can't be dragged below readable
                 _sidebarToggleBtn.ToolTip = Loc("Str_TT_CollapseSidebar");
+                SidebarSplitter.IsEnabled = true;
             }
             UpdateSidebarToggleGlyph();
             if (PageList.SelectedIndex >= 0)
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
                     () => RefreshPageView(PageList.SelectedIndex));
+        }
+
+        // Pressing the splitter while the sidebar is collapsed begins pulling it open: reveal the page
+        // list (still 0-width against the 24px strip, so there's no flash) so the drag grows it live. If
+        // the user doesn't drag past the threshold, OnSidebarResized snaps it shut again on release.
+        private bool _sidebarDragOpening;   // true while dragging the splitter open from the collapsed strip
+        private bool _sidebarWantClose;     // set during an open-resize drag when pulled past the close edge
+
+        private void OnSidebarSplitterPress()
+        {
+            if (!_sidebarCollapsed) return;
+            // Begin pulling open from the strip. Show the sidebar background + grain right away so the
+            // growing strip matches the sidebar, but keep the content (header + list) hidden until it's
+            // pulled to the readable minimum (OnSidebarSplitterMove) - so nothing shows clipped, and the
+            // column grows from the 24px edge tracking the mouse with no dead zone.
+            _sidebarCollapsed = false;
+            _sidebarDragOpening = true;
+            _sidebarBorder.Visibility = Visibility.Visible;
+            SidebarContentPanel.Visibility = Visibility.Collapsed;
+            _sidebarToggleBtn.ToolTip = Loc("Str_TT_CollapseSidebar");
+            UpdateSidebarToggleGlyph();
+        }
+
+        // Drives the splitter drag. While opening from the strip, reveal the list only once it's past the
+        // readable minimum. Once open, pulling the mouse well past the minimum closes the sidebar (the
+        // MinWidth clamp already stops the column from ever shrinking below the readable floor).
+        private void OnSidebarSplitterMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (_sidebarCollapsed || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
+            if (_sidebarDragOpening)
+            {
+                SidebarContentPanel.Visibility = _sidebarCol.ActualWidth >= SidebarMinOpen
+                    ? Visibility.Visible : Visibility.Collapsed;
+                return;
+            }
+            // The column is clamped at the readable minimum (MinWidth), so it can't clip and the document
+            // isn't resized as you pull. Just record intent; the actual close (and its single re-render)
+            // happens on release in OnSidebarResized - so dragging the splitter never re-renders the page.
+            double mx = e.GetPosition(MainContentGrid).X;
+            const double closeBuffer = 36;   // pull this far past the minimum edge to close on release
+            _sidebarWantClose = _sidebarRight
+                ? mx > MainContentGrid.ActualWidth - SidebarMinOpen + closeBuffer
+                : mx < SidebarMinOpen - closeBuffer;
+        }
+
+        // Called when the user finishes dragging the sidebar splitter. If they dragged it narrower than
+        // the close threshold, snap it fully closed (to the toggle strip) instead of leaving an unusable
+        // sliver; otherwise remember the new width for the current mode.
+        private void OnSidebarResized()
+        {
+            _sidebarDragOpening = false;
+            if (_sidebarCollapsed) { _sidebarWantClose = false; return; }
+            if (_sidebarWantClose) { _sidebarWantClose = false; CollapseSidebarToStrip(); return; }
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
+            {
+                if (_sidebarCollapsed) return;
+                double w = _sidebarCol.ActualWidth;
+                if (w < SidebarMinOpen)
+                {
+                    // Released below the readable minimum: snap to whichever end the user let go nearer
+                    // to - fully closed, or the minimum open width.
+                    double mid = (24 + SidebarMinOpen) / 2.0;
+                    if (w < mid) { CollapseSidebarToStrip(); return; }
+                    _sidebarCol.Width = new GridLength(SidebarMinOpen);
+                    w = SidebarMinOpen;
+                }
+                _sidebarBorder.Visibility = Visibility.Visible;        // ensure the list shows when settled open
+                SidebarContentPanel.Visibility = Visibility.Visible;
+                _sidebarCol.MinWidth = SidebarMinOpen;                 // clamp future resizes so they can't clip
+                if (_sidebarShowingOutlines) _savedOutlinesWidth = Math.Min(w, SidebarMaxOutlines);
+                else _savedPagesWidth = Math.Min(w, SidebarMaxPages);
+            }));
+        }
+
+        // Collapse to the 24px toggle strip without overwriting the saved width, so re-expand restores the
+        // last good size rather than the thin dragged one. Mirrors SidebarToggle_Click's collapse branch.
+        private void CollapseSidebarToStrip()
+        {
+            _sidebarCollapsed = true;
+            _sidebarToggleBtn.ToolTip = Loc("Str_TT_ExpandSidebar");
+            _sidebarBorder.Visibility = Visibility.Collapsed;
+            SidebarContentPanel.Visibility = Visibility.Visible;   // reset so the next border-show has content
+            _sidebarCol.Width = new GridLength(24);
+            _sidebarCol.MinWidth = 24;
+            UpdateSidebarToggleGlyph();   // splitter stays enabled so it can be dragged back open
         }
 
         // ============================================================
@@ -4301,8 +4454,9 @@ namespace KillerPDF
         private void SidebarPagesTab_Click(object sender, RoutedEventArgs e) => SwitchSidebarToPagesTab();
         private void SidebarOutlinesTab_Click(object sender, RoutedEventArgs e) => SwitchSidebarToOutlinesTab();
 
-        private const double SidebarMaxPages   = 260;
+        private const double SidebarMaxPages   = 300;
         private const double SidebarMaxOutlines = 480;
+        private const double SidebarMinOpen     = 120;   // narrowest readable width before labels/header clip
 
         private void SwitchSidebarToPagesTab()
         {
@@ -4316,7 +4470,7 @@ namespace KillerPDF
             if (!_sidebarCollapsed && _sidebarCol.ActualWidth > 0)
                 _savedOutlinesWidth = Math.Min(_sidebarCol.ActualWidth, SidebarMaxOutlines);
 
-            SidebarSplitter.IsEnabled = false;
+            SidebarSplitter.IsEnabled = true;   // pages are resizable too now (drag the splitter)
             _sidebarCol.MaxWidth = SidebarMaxPages;
             if (!_sidebarCollapsed)
             {
@@ -5231,17 +5385,26 @@ namespace KillerPDF
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                IsHitTestVisible = false,
-                Visibility = Visibility.Collapsed
+                IsHitTestVisible = false
             };
             var fill = TryFindResource("TextSecondary") as Brush ?? Brushes.Gray;   // match the sidebar handle dots
             for (int i = 0; i < 6; i++)
                 dots.Children.Add(new System.Windows.Shapes.Ellipse
                 { Width = 3, Height = 3, Margin = new Thickness(2, 0, 2, 0), Fill = fill });
-            host.Children.Add(dots);
+            // The dots live in a transparent, hit-testable strip that fills the bar. While the bar is
+            // minimized this strip is shown, so the whole peek strip can be dragged left/right (the slide
+            // is wired to it in PlaceAnnotationBar) - same as dragging the grip on the expanded bar.
+            var dotsStrip = new Border
+            {
+                Background = Brushes.Transparent,
+                Cursor = Cursors.SizeAll,
+                Visibility = Visibility.Collapsed,
+                Child = dots
+            };
+            host.Children.Add(dotsStrip);
 
             _annotBarContent = content;
-            _annotBarDots = dots;
+            _annotBarDots = dotsStrip;
             return host;
         }
 
@@ -5355,6 +5518,8 @@ namespace KillerPDF
                 }
             }
             EnableBarSlide(grip, bar, area);
+            // The minimized peek strip drags the bar too, so a collapsed bar can be repositioned.
+            if (_annotBarDots is not null) EnableBarSlide(_annotBarDots, bar, area);
             // A freshly built bar has no measured width yet, so PositionAnnotationBar can't place it until
             // layout runs. Hide it for that one frame (Opacity 0 still lays out, so width measures), then
             // anchor and reveal it - otherwise it renders at its default right edge first and visibly
@@ -6036,8 +6201,8 @@ namespace KillerPDF
                 Margin = new Thickness(0, 0, 6, 0),
                 Padding = new Thickness(4)
             };
-            sigCloseBtn.MouseEnter += (_, _) => sigCloseBtn.Foreground = (SolidColorBrush)FindResource("TextPrimary");
-            sigCloseBtn.MouseLeave += (_, _) => sigCloseBtn.Foreground = (SolidColorBrush)FindResource("TextSecondary");
+            sigCloseBtn.MouseEnter += (_, _) => { sigCloseBtn.Foreground = (SolidColorBrush)FindResource("DangerRed"); sigCloseBtn.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = System.Windows.Media.Colors.Black, BlurRadius = 4, ShadowDepth = 1, Direction = 270, Opacity = 0.5 }; };
+            sigCloseBtn.MouseLeave += (_, _) => { sigCloseBtn.Foreground = (SolidColorBrush)FindResource("TextSecondary"); sigCloseBtn.Effect = null; };
             sigCloseBtn.MouseLeftButtonDown += (_, e) =>
             {
                 e.Handled = true;
@@ -9601,6 +9766,11 @@ namespace KillerPDF
                 NewDocument();
                 e.Handled = true;
             }
+            else if (e.Key == Key.B && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                SidebarToggle_Click(this, e);   // collapse / restore the sidebar
+                e.Handled = true;
+            }
             // Bare-key tool switches. Only when a document is open, no modifier is held, and no
             // overlay is up (and not while typing - guarded at the top of this handler).
             else if (Keyboard.Modifiers == ModifierKeys.None && _doc is not null
@@ -9676,17 +9846,38 @@ namespace KillerPDF
         {
             switch (key)
             {
-                case Key.V: SetTool(EditTool.Select);        return true;
-                case Key.T: SetTool(EditTool.Text);          return true;
-                case Key.H: SetTool(EditTool.Highlight);     return true;
-                case Key.K: SetTool(EditTool.Strikethrough); return true;
-                case Key.U: SetTool(EditTool.Underline);     return true;
-                case Key.D: SetTool(EditTool.Draw);          return true;
-                case Key.C: SetTool(EditTool.Crop);          return true;
-                case Key.I: SetTool(EditTool.Image);         return true;
-                case Key.G: ToolSignature_Click(this, new RoutedEventArgs()); return true;
+                // Tools are reachable by their toolbar position (1-9, left to right); the original letter
+                // keys stay as fallbacks. Both the number-row and numpad digits map.
+                case Key.V: case Key.D1: case Key.NumPad1: SetTool(EditTool.Select);        return true;
+                case Key.T: case Key.D2: case Key.NumPad2: SetTool(EditTool.Text);          return true;
+                case Key.U: case Key.D3: case Key.NumPad3: SetTool(EditTool.Underline);     return true;
+                case Key.K: case Key.D4: case Key.NumPad4: SetTool(EditTool.Strikethrough); return true;
+                case Key.H: case Key.D5: case Key.NumPad5: SetTool(EditTool.Highlight);     return true;
+                case Key.D: case Key.D6: case Key.NumPad6: SetTool(EditTool.Draw);          return true;
+                case Key.I: case Key.D7: case Key.NumPad7: SetTool(EditTool.Image);         return true;
+                case Key.G: case Key.D8: case Key.NumPad8: ToolSignature_Click(this, new RoutedEventArgs()); return true;
+                case Key.C: case Key.D9: case Key.NumPad9: SetTool(EditTool.Crop);          return true;
                 default:    return false;
             }
+        }
+
+        // Appends each tool's toolbar position (1-9) to its tooltip, e.g. "Highlight (5)". Re-resolves the
+        // localized base text so a language switch keeps the right wording (re-run from SelectLocale).
+        private void ApplyToolNumberTooltips()
+        {
+            void Set(System.Windows.Controls.Button btn, string key, int n)
+            {
+                if (btn != null && TryFindResource(key) is string s) btn.ToolTip = $"{s} ({n})";
+            }
+            Set(ToolSelectBtn,    "Str_TT_SelectTool",    1);
+            Set(ToolTextBtn,      "Str_TT_TextTool",      2);
+            Set(ToolUnderlineBtn, "Str_TT_UnderlineTool", 3);
+            Set(ToolStrikeBtn,    "Str_TT_StrikeTool",    4);
+            Set(ToolHighlightBtn, "Str_TT_HighlightTool", 5);
+            Set(ToolDrawBtn,      "Str_TT_DrawTool",      6);
+            Set(ToolImageBtn,     "Str_TT_ImageTool",     7);
+            Set(ToolSignatureBtn, "Str_TT_SignatureTool", 8);
+            Set(ToolCropBtn,      "Str_TT_CropTool",      9);
         }
 
         // ============================================================
@@ -9827,15 +10018,10 @@ namespace KillerPDF
                     case SignatureAnnotation sa:
                         if (sa.ImageData is not null)
                         {
-                            // Image-based signature
-                            try
+                            // Image-based signature (decoded once, then cached on the annotation)
+                            var bmp = GetAnnotationBitmap(sa, sa.ImageData);
+                            if (bmp != null)
                             {
-                                var imgBytes = Convert.FromBase64String(sa.ImageData);
-                                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                                bmp.BeginInit();
-                                bmp.StreamSource = new System.IO.MemoryStream(imgBytes);
-                                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                                bmp.EndInit();
                                 var imgCtrl = new System.Windows.Controls.Image
                                 {
                                     Source = bmp,
@@ -9848,7 +10034,6 @@ namespace KillerPDF
                                 Canvas.SetTop(imgCtrl, sa.Position.Y);
                                 _activeCanvas.Children.Add(imgCtrl);
                             }
-                            catch { /* skip broken image */ }
                         }
                         else
                         {
@@ -9873,14 +10058,9 @@ namespace KillerPDF
                         break;
 
                     case ImageAnnotation ia:
-                        try
+                        var iaBmp = GetAnnotationBitmap(ia, ia.ImageData);
+                        if (iaBmp != null)
                         {
-                            var iaBytes = Convert.FromBase64String(ia.ImageData);
-                            var iaBmp = new System.Windows.Media.Imaging.BitmapImage();
-                            iaBmp.BeginInit();
-                            iaBmp.StreamSource = new System.IO.MemoryStream(iaBytes);
-                            iaBmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                            iaBmp.EndInit();
                             var iaCtrl = new System.Windows.Controls.Image
                             {
                                 Source = iaBmp,
@@ -9893,7 +10073,6 @@ namespace KillerPDF
                             Canvas.SetTop(iaCtrl, ia.Position.Y);
                             _activeCanvas.Children.Add(iaCtrl);
                         }
-                        catch { /* skip broken image */ }
                         break;
                 }
             }
@@ -9901,6 +10080,26 @@ namespace KillerPDF
             // Re-add form field overlays — RenderAllAnnotations clears the canvas so they must be restored.
             if (_renderDims.TryGetValue(pageIndex, out var dims))
                 RenderFormFields(pageIndex, dims.w, dims.h);
+        }
+
+        // Decode a placed annotation's Base64 image once and cache the frozen result on the annotation,
+        // so repeated renders (e.g. every mousemove of a resize-drag) reuse it instead of re-decoding.
+        private static System.Windows.Media.Imaging.BitmapSource? GetAnnotationBitmap(PlacedAnnotation a, string? data)
+        {
+            if (a.CachedBitmap != null) return a.CachedBitmap;
+            if (string.IsNullOrEmpty(data)) return null;
+            try
+            {
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = new System.IO.MemoryStream(Convert.FromBase64String(data));
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                a.CachedBitmap = bmp;
+                return bmp;
+            }
+            catch { return null; }
         }
 
         private void Undo_Click(object sender, RoutedEventArgs e)
@@ -10303,12 +10502,12 @@ namespace KillerPDF
                         Width = 18, Height = 18,
                         VerticalAlignment = VerticalAlignment.Center,
                         Margin = new Thickness(0),
-                        Foreground = (SolidColorBrush)FindResource("TextSecondary"),
+                        // No local Foreground - it would override the DangerCloseButton hover trigger.
                         Background = Brushes.Transparent,
                         BorderThickness = new Thickness(0),
                         Cursor = Cursors.Hand,
                         Padding = new Thickness(0),
-                        Style = (Style)FindResource("ToolbarButton"),
+                        Style = (Style)FindResource("DangerCloseButton"),
                         ToolTip = "Remove from list"
                     };
                     rmBtn.Click += (_, ev) =>
@@ -10425,8 +10624,8 @@ namespace KillerPDF
                     Child             = delIcon,
                     ToolTip           = Loc("Str_Menu_RemoveFromRecents")
                 };
-                del.MouseEnter += (_, _) => { del.Background = (SolidColorBrush)FindResource("BgHover"); delIcon.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary"); };
-                del.MouseLeave += (_, _) => { del.Background = System.Windows.Media.Brushes.Transparent; delIcon.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary"); };
+                del.MouseEnter += (_, _) => { delIcon.SetResourceReference(TextBlock.ForegroundProperty, "DangerRed"); delIcon.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = System.Windows.Media.Colors.Black, BlurRadius = 4, ShadowDepth = 1, Direction = 270, Opacity = 0.5 }; };
+                del.MouseLeave += (_, _) => { delIcon.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary"); delIcon.Effect = null; };
                 del.MouseLeftButtonDown += (_, ev) =>
                 {
                     ev.Handled = true;   // don't open the file
@@ -11160,7 +11359,13 @@ namespace KillerPDF
             };
             Panel.SetZIndex(overlay, 10050); // above the Settings/Shortcuts/About overlays
 
-            // Add as a sibling of the full-window overlays so it covers the whole window.
+            // Cover the whole window for a uniform dim, but let the user drag the window by pressing
+            // anywhere on the overlay - so a long operation (e.g. repair) doesn't trap the window in place.
+            overlay.Cursor = Cursors.SizeAll;
+            overlay.MouseLeftButtonDown += (_, e) =>
+            {
+                if (e.ButtonState == MouseButtonState.Pressed) { try { DragMove(); } catch { } }
+            };
             if (SettingsOverlay?.Parent is Grid host)
             {
                 if (host.RowDefinitions.Count > 0) Grid.SetRowSpan(overlay, host.RowDefinitions.Count);
@@ -12891,7 +13096,10 @@ namespace KillerPDF
 
                         int fi = i, fw = w, fh = h;
                         byte[] bytes = raw;
-                        Application.Current.Dispatcher.Invoke(() =>
+                        if (cts.IsCancellationRequested) return;
+                        // Use the window's own dispatcher, not Application.Current.Dispatcher: during app
+                        // shutdown Application.Current goes null and this background render would NRE.
+                        Dispatcher.Invoke(() =>
                         {
                             if (cts.IsCancellationRequested || _viewMode != ViewMode.Continuous) return;
                             if (fi >= _continuousPanel.Children.Count) return;

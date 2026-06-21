@@ -24,6 +24,11 @@ namespace KillerPDF
         public double Scale { get; set; } = 0.5;
         public double SourceWidth { get; set; } = 400;
         public double SourceHeight { get; set; } = 150;
+
+        // Runtime-only cache of the decoded image (for image signatures / placed images). Held in
+        // memory so a resize-drag doesn't re-decode the Base64 on every mouse tick. Not serialized;
+        // the immutable ImageData stays the source of truth.
+        public System.Windows.Media.Imaging.BitmapSource? CachedBitmap;
     }
 
     public class TextAnnotation : PageAnnotation

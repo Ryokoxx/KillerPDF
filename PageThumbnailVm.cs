@@ -79,7 +79,11 @@ namespace KillerPDF
         {
             try
             {
-                using var docReader = DocLib.Instance.GetDocReader(filePath, new PageDimensions(128, 256));
+                // Render thumbnails at a higher resolution than they're usually shown so the page list
+                // stays crisp when the sidebar is dragged wider (thumbnails scale to the sidebar width).
+                // 288px covers the ~240px the page can show at the widest sidebar; raise for sharper,
+                // lower to save memory (each loaded thumbnail is kept in RAM).
+                using var docReader = DocLib.Instance.GetDocReader(filePath, new PageDimensions(288, 576));
                 using var pr = docReader.GetPageReader(pageIndex);
                 int tw  = pr.GetPageWidth();
                 int th  = pr.GetPageHeight();
