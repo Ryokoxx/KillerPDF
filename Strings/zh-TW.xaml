@@ -283,4 +283,49 @@
     <sys:String x:Key="Str_TT_CropRemoveAll">從所有頁面移除 CropBox</sys:String>
     <sys:String x:Key="Str_TT_CropCancel">取消 (Escape)</sys:String>
 
+    <!-- ── 直線工具、圖層 / 群組選單（v1.5.x 新增） ─────────────────────── -->
+    <sys:String x:Key="Str_Lbl_Line">直線</sys:String>
+    <sys:String x:Key="Str_TT_LineTool">直線 - 拖曳以繪製直線</sys:String>
+    <sys:String x:Key="Str_Ctx_Edit">編輯</sys:String>
+    <sys:String x:Key="Str_Ctx_Raise">上移</sys:String>
+    <sys:String x:Key="Str_Ctx_Lower">下移</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectCover">選擇遮蓋</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectText">選擇文字</sys:String>
+    <sys:String x:Key="Str_Ctx_Unpair">取消文字與遮蓋的配對</sys:String>
+    <sys:String x:Key="Str_Ctx_Group">群組所選</sys:String>
+    <sys:String x:Key="Str_Ctx_Ungroup">取消群組</sys:String>
+    <sys:String x:Key="Str_Ctx_RemoveFromGroup">從群組移除</sys:String>
+    <sys:String x:Key="Str_Ctx_Copy">複製</sys:String>
+    <sys:String x:Key="Str_Ctx_Paste">貼上</sys:String>
+    <!-- ── 註解列標籤 ──────────────────────────────────────────────────── -->
+    <sys:String x:Key="Str_Bar_Color">顏色：</sys:String>
+    <sys:String x:Key="Str_Bar_Fill">填滿：</sys:String>
+    <sys:String x:Key="Str_Bar_Size">大小：</sys:String>
+    <sys:String x:Key="Str_Bar_Opacity">不透明度：</sys:String>
+    <sys:String x:Key="Str_Bar_FillOpacity">填滿不透明度：</sys:String>
+    <sys:String x:Key="Str_Bar_Font">字型：</sys:String>
+    <sys:String x:Key="Str_Bar_Level">水平</sys:String>
+    <sys:String x:Key="Str_Bar_Eraser">橡皮擦</sys:String>
+    <sys:String x:Key="Str_Bar_MoreColors">更多顏色...</sys:String>
+    <sys:String x:Key="Str_Sig_Signatures">簽名</sys:String>
+    <sys:String x:Key="Str_Sig_Initials">姓名縮寫</sys:String>
+    <sys:String x:Key="Str_Sig_Pen">畫筆</sys:String>
+    <sys:String x:Key="Str_Sig_Thin">細</sys:String>
+    <sys:String x:Key="Str_Sig_Medium">中</sys:String>
+    <sys:String x:Key="Str_Sig_Thick">粗</sys:String>
+    <!-- ── 數位簽章對話框 ──────────────────────────────────────────────── -->
+    <sys:String x:Key="Str_Sign_Desc">使用憑證密封 {0} 並儲存簽署副本。</sys:String>
+    <sys:String x:Key="Str_Sign_Certificate">憑證</sys:String>
+    <sys:String x:Key="Str_Sign_FromFile">來自檔案 (.pfx / .p12)</sys:String>
+    <sys:String x:Key="Str_Sign_FromStore">來自 Windows 憑證存放區</sys:String>
+    <sys:String x:Key="Str_Sign_Browse">瀏覽...</sys:String>
+    <sys:String x:Key="Str_Sign_Password">密碼</sys:String>
+    <sys:String x:Key="Str_Sign_Reason">原因（選填）</sys:String>
+    <sys:String x:Key="Str_Sign_Location">位置（選填）</sys:String>
+    <sys:String x:Key="Str_Sign_Contact">聯絡方式（選填）</sys:String>
+    <sys:String x:Key="Str_Sign_SaveAs">簽署副本另存為</sys:String>
+    <sys:String x:Key="Str_Sign_Sign">簽署</sys:String>
+    <sys:String x:Key="Str_Sign_Cancel">取消</sys:String>
+    <sys:String x:Key="Str_Sign_TitleSuffix">數位簽章</sys:String>
+    <sys:String x:Key="Str_Lbl_DigitalSig">數位簽章...</sys:String>
 </ResourceDictionary>

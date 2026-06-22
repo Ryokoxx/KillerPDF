@@ -4,7 +4,7 @@ using System.Windows.Media;
 
 namespace KillerPDF
 {
-    public enum EditTool { Select, Text, Highlight, Strikethrough, Underline, Draw, Signature, Image, Crop }
+    public enum EditTool { Select, Text, Highlight, Strikethrough, Underline, Draw, Signature, Image, Crop, Line }
 
     /// <summary>How a HighlightAnnotation paints over its bounds.</summary>
     public enum HighlightStyle { Fill, Strikethrough, Underline }
@@ -16,6 +16,10 @@ namespace KillerPDF
         // PairId renders dashed (it's "paired"); when the partner text is deleted the cover's PairId is
         // cleared and it renders as a solid box. Empty for everything else.
         public string PairId { get; set; } = "";
+
+        // Groups arbitrary annotations so they select and move together (same non-empty id on every
+        // member). Independent of PairId. Empty when the annotation isn't grouped.
+        public string GroupId { get; set; } = "";
     }
 
     /// <summary>
@@ -40,6 +44,13 @@ namespace KillerPDF
         public Point Position { get; set; }
         public string Content { get; set; } = "";
         public double FontSize { get; set; } = 14;
+        // Typeface and style. FontName is a font-family name (any installed system font). Bold/Italic/Strike
+        // apply to the whole box. Defaults keep text placed before these existed rendering as plain Segoe UI.
+        public string FontName { get; set; } = "Segoe UI";
+        public bool Bold { get; set; }
+        public bool Italic { get; set; }
+        public bool Strike { get; set; }
+        public bool Underline { get; set; }
         public byte ColorR { get; set; } = 0;
         public byte ColorG { get; set; } = 0;
         public byte ColorB { get; set; } = 0;

@@ -39,6 +39,9 @@ namespace KillerPDF
 
         private static SolidColorBrush R(string key) => (SolidColorBrush)Application.Current.Resources[key];
 
+        // Localized string from the active locale dictionary (falls back to the key if missing).
+        private static string L(string key) => Application.Current.TryFindResource(key) as string ?? key;
+
         public SignDocumentDialog(Window? owner, string sourcePdf)
         {
             _sourcePdf = sourcePdf;
@@ -90,16 +93,16 @@ namespace KillerPDF
 
             body.Children.Add(new TextBlock
             {
-                Text = "Seals " + Path.GetFileName(_sourcePdf) + " with a certificate and saves a signed copy.",
+                Text = string.Format(L("Str_Sign_Desc"), Path.GetFileName(_sourcePdf)),
                 Foreground = R("TextSecondary"), FontSize = 11, TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 14)
             });
 
             // --- Certificate source --------------------------------------------------------------
-            body.Children.Add(Label("Certificate"));
+            body.Children.Add(Label(L("Str_Sign_Certificate")));
 
-            _fileRadio = Radio("From a file (.pfx / .p12)", true);
-            _storeRadio = Radio("From the Windows certificate store", false);
+            _fileRadio = Radio(L("Str_Sign_FromFile"), true);
+            _storeRadio = Radio(L("Str_Sign_FromStore"), false);
             _fileRadio.Checked += (_, _) => SyncSource();
             _storeRadio.Checked += (_, _) => SyncSource();
             body.Children.Add(_fileRadio);
@@ -110,14 +113,14 @@ namespace KillerPDF
             _pfxBox = Field("");
             _pfxBox.Margin = new Thickness(0, 0, 6, 0);
             Grid.SetColumn(_pfxBox, 0);
-            _browsePfx = MakeButton("Browse...", false);
+            _browsePfx = MakeButton(L("Str_Sign_Browse"), false);
             _browsePfx.Click += (_, _) => BrowsePfx();
             Grid.SetColumn(_browsePfx, 1);
             fileRow.Children.Add(_pfxBox);
             fileRow.Children.Add(_browsePfx);
             body.Children.Add(fileRow);
 
-            body.Children.Add(new TextBlock { Text = "Password", Foreground = R("TextSecondary"), FontSize = 11, Margin = new Thickness(20, 4, 0, 2) });
+            body.Children.Add(new TextBlock { Text = L("Str_Sign_Password"), Foreground = R("TextSecondary"), FontSize = 11, Margin = new Thickness(20, 4, 0, 2) });
             _pwBox = new PasswordBox
             {
                 Margin = new Thickness(20, 0, 0, 10),
@@ -143,22 +146,22 @@ namespace KillerPDF
             body.Children.Add(_storeCombo);
 
             // --- Metadata ------------------------------------------------------------------------
-            body.Children.Add(Label("Reason (optional)"));
+            body.Children.Add(Label(L("Str_Sign_Reason")));
             _reasonBox = Field(""); body.Children.Add(_reasonBox);
-            body.Children.Add(Label("Location (optional)"));
+            body.Children.Add(Label(L("Str_Sign_Location")));
             _locationBox = Field(""); body.Children.Add(_locationBox);
-            body.Children.Add(Label("Contact (optional)"));
+            body.Children.Add(Label(L("Str_Sign_Contact")));
             _contactBox = Field(""); body.Children.Add(_contactBox);
 
             // --- Output --------------------------------------------------------------------------
-            body.Children.Add(Label("Save signed copy as"));
+            body.Children.Add(Label(L("Str_Sign_SaveAs")));
             var outRow = new Grid();
             outRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             outRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             _outputBox = Field(DefaultOutputPath());
             _outputBox.Margin = new Thickness(0, 0, 6, 0);
             Grid.SetColumn(_outputBox, 0);
-            var browseOut = MakeButton("Browse...", false);
+            var browseOut = MakeButton(L("Str_Sign_Browse"), false);
             browseOut.Click += (_, _) => BrowseOutput();
             Grid.SetColumn(browseOut, 1);
             outRow.Children.Add(_outputBox);
@@ -167,9 +170,9 @@ namespace KillerPDF
 
             // --- Buttons -------------------------------------------------------------------------
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
-            var sign = MakeButton("Sign", true);
+            var sign = MakeButton(L("Str_Sign_Sign"), true);
             sign.Click += (_, _) => DoSign();
-            var cancel = MakeButton("Cancel", false);
+            var cancel = MakeButton(L("Str_Sign_Cancel"), false);
             cancel.Margin = new Thickness(8, 0, 0, 0);
             cancel.Click += (_, _) => { DialogResult = false; Close(); };
             btnRow.Children.Add(sign);
@@ -201,7 +204,7 @@ namespace KillerPDF
             };
             wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = ff, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary"), VerticalAlignment = VerticalAlignment.Center });
             wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = ff, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo"), VerticalAlignment = VerticalAlignment.Center });
-            wm.Children.Add(new TextBlock { Text = " - Digital Signature", FontFamily = ff, FontSize = 13, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
+            wm.Children.Add(new TextBlock { Text = " - " + L("Str_Sign_TitleSuffix"), FontFamily = ff, FontSize = 13, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
             Grid.SetColumn(wm, 0);
 
             var closeBtn = new Button { Content = CloseGlyph };

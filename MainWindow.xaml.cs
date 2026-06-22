@@ -73,7 +73,7 @@ namespace KillerPDF
 
         // Undo stack — each entry is either an annotation removal or a full document snapshot.
         // AnnotationGroup removes a specific set of annotations in one step (a text edit = cover + text).
-        private enum UndoKind { Annotation, Document, StampBatch, ClearAnnotations, AnnotationGroup }
+        private enum UndoKind { Annotation, Document, StampBatch, ClearAnnotations, AnnotationGroup, PageSnapshot }
         private readonly record struct UndoEntry(UndoKind Kind, int PageIdx = -1, byte[]? DocBytes = null, bool WasDirty = false, int[]? Pages = null, PageAnnotation? Annot = null, Dictionary<int, List<PageAnnotation>>? AnnotSnapshot = null, List<PageAnnotation>? AnnotGroup = null);
         private Stack<UndoEntry> _undoStack = new();
         private bool _isDrawing;
@@ -92,6 +92,9 @@ namespace KillerPDF
         private Color _drawColor = Colors.Red;
         private double _drawWidth = 3;
         private byte _drawOpacity = 255;
+        private bool _lineLevel = true;   // Line tool: keep the line perfectly horizontal (default on)
+        private bool _highlightErase;     // Highlight tool: drag a box to delete annotations inside it
+        private bool _drawErase;          // Draw tool: brush over annotations to delete them
         private Color _highlightColor = Color.FromArgb(80, 255, 255, 0);
         // Strikethrough / underline lines: opaque red by default.
         private Color _lineAnnotColor = Color.FromArgb(255, 220, 38, 38);
@@ -99,6 +102,18 @@ namespace KillerPDF
 
         // Text (typewriter) tool settings
         private double _textFontSize = 24;
+        // Current text-tool typeface and style (mirrors the text bar; carried onto each new/edited box).
+        private string _textFontName = "Segoe UI";
+        private bool _textBold;
+        private bool _textItalic;
+        private bool _textStrike;
+        private bool _textUnderline;
+        // Installed font-family names, sorted, computed once (the text bar rebuilds often).
+        private static List<string>? _systemFontNamesCache;
+        private static List<string> SystemFontNames => _systemFontNamesCache ??=
+            System.Windows.Media.Fonts.SystemFontFamilies
+                .Select(f => f.Source).Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct().OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
         // WPF renders a given point size visually ~25% larger than the source PDF text, so scale the
         // detected size down when seeding an existing-text edit. The user can still fine-tune after.
         private const double EditTextSizeCorrection = 0.8;
@@ -188,6 +203,7 @@ namespace KillerPDF
         private Point _selectStart;
         private Rectangle? _selectRect;
         private Rectangle? _pairedCoverOutline;   // dashed hint over a cover while its paired text is selected
+        private Rectangle? _reeditCoverOutline;   // dashed hint over a cover while its paired text is being re-edited
         private string? _selectedText;
 
         // Search
@@ -254,6 +270,11 @@ namespace KillerPDF
             if (v != null) VersionLabel.Text = $"v{v.Major}.{v.Minor}.{v.Build}";
             _annotationCanvas = (Canvas)FindName("AnnotationCanvas")!;
             _activeCanvas = _annotationCanvas;
+            // Safety net: if the window loses focus mid-drag/resize (e.g. Alt-Tab away to type elsewhere),
+            // the mouse-up can be lost and the dragged annotation would stay glued to the cursor with the
+            // canvas still holding mouse capture. End any in-progress gesture on deactivate so control is
+            // restored the moment the user comes back.
+            Deactivated += (_, _) => { if (_isDraggingAnnot || _isResizingSig) FinishStuckGesture(); };
             _pageContentGrid = (Grid)FindName("PageContentGrid")!;
             _toolSelectBtn = (Button)FindName("ToolSelectBtn")!;
             _toolTextBtn = (Button)FindName("ToolTextBtn")!;
@@ -553,10 +574,13 @@ namespace KillerPDF
             // Anchor the panel against the sidebar's inner edge so it opens toward the document,
             // on whichever side the sidebar currently sits.
             SettingsPanel.Margin = _sidebarRight
-                ? new Thickness(0, 0, edge, 36)
-                : new Thickness(edge, 0, 0, 36);
-            // Never grow taller than the document area; the inner ScrollViewer scrolls instead.
-            SettingsPanel.MaxHeight = Math.Max(240, MainContentGrid.ActualHeight - 8);
+                ? new Thickness(0, 0, edge, 28)
+                : new Thickness(edge, 0, 0, 28);
+            // Cap to the DOCUMENT pane height (below the tab strip, above the 28px footer) - NOT
+            // MainContentGrid, which also spans the tab-strip row and made the panel run up under the tabs.
+            // With the 28px bottom margin matching the footer, the panel top lands just below the tab bar;
+            // the inner ScrollViewer scrolls when the content is taller.
+            SettingsPanel.MaxHeight = Math.Max(160, DocPaneBorder.ActualHeight);
         }
 
         // ── Quick fade in/out for the full-window overlay panels (Settings/Shortcuts/About) ──
@@ -831,6 +855,19 @@ namespace KillerPDF
             // DynamicResource), so rebuild the toolbar on every language change. Harmless for the
             // icon-only modes; refreshes the captions for Text-beside / Text-under / Text-only.
             ApplyToolbarAppearance();
+
+            // The annotate bars (text / draw) also capture Loc() values when built, so rebuild whichever
+            // one is currently showing in the new language.
+            if (_annotBarTool == EditTool.Text)
+                ShowTextSettings();
+            else if (_annotBarTool is EditTool bt &&
+                     bt is EditTool.Draw or EditTool.Highlight or EditTool.Line
+                        or EditTool.Strikethrough or EditTool.Underline)
+                ShowDrawSettings(bt);
+
+            // A visible signature popup is built with Loc() too; rebuild it so its section headers and
+            // pen labels switch immediately.
+            RefreshSignaturePopupLanguage();
         }
 
         // Native name (autonym) for each language, shown in the picker regardless of UI locale.
@@ -888,6 +925,7 @@ namespace KillerPDF
             [""] = "Str_Lbl_Undo",     [""] = "Str_Lbl_Clear",
             [""] = "Str_Lbl_ZoomOut",  [""] = "Str_Lbl_ZoomIn",
             [""] = "Str_Lbl_Highlight",   // current highlighter glyph (see ToolHighlightBtn)
+            [""] = "Str_Lbl_Line",   // repurposed ToolUnderlineBtn glyph = the Line tool
         };
 
         // Walks LeftBar + RightBar once and records each icon button with its glyph + label key.
@@ -1087,8 +1125,7 @@ namespace KillerPDF
                     (ToolCropBtn,       new UIElement[] { MiCrop }),
                     (GrpUndo,           new UIElement[] { MiUndo, MiClear }),
                     (ToolDrawBtn,       new UIElement[] { MiDraw }),
-                    (ToolStrikeBtn,     new UIElement[] { MiStrike }),
-                    (ToolUnderlineBtn,  new UIElement[] { MiUnderline }),
+                    (ToolUnderlineBtn,  new UIElement[] { MiUnderline }),   // now the Line tool
                     (ToolHighlightBtn,  new UIElement[] { MiHighlight }),
                     (ToolTextBtn,       new UIElement[] { MiText }),
                 };
@@ -1113,6 +1150,20 @@ namespace KillerPDF
                     ToolbarGrid.UpdateLayout();
                 }
 
+                // Keep the ACTIVE tool on the bar no matter how narrow, so its selected state stays visible -
+                // otherwise it vanishes into the overflow chevron and there's no way to tell what's active.
+                UIElement? activeToolBar = _currentTool switch
+                {
+                    EditTool.Text      => ToolTextBtn,
+                    EditTool.Line      => ToolUnderlineBtn,   // repurposed to the Line tool
+                    EditTool.Highlight => ToolHighlightBtn,
+                    EditTool.Draw      => ToolDrawBtn,
+                    EditTool.Image     => ToolImageBtn,
+                    EditTool.Crop      => ToolCropBtn,
+                    EditTool.Signature => GrpSignature,
+                    _ => null
+                };
+
                 // First defence against a narrow bar (and the long-standing behavior): collapse whole
                 // low-priority groups into the overflow menu, KEEPING captions on whatever stays. This
                 // is what runs at normal widths - captions stay, extras move to the chevron.
@@ -1120,6 +1171,7 @@ namespace KillerPDF
                 {
                     foreach (var (grp, items) in order)
                     {
+                        if (ReferenceEquals(grp, activeToolBar)) continue;   // never collapse the active tool
                         grp.Visibility = Visibility.Collapsed;          // pull this group out of the bar
                         foreach (var it in items) it.Visibility = Visibility.Visible;  // ...into the popup
                         ToolbarGrid.UpdateLayout();
@@ -1156,6 +1208,12 @@ namespace KillerPDF
 
         private const int  WM_GETMINMAXINFO   = 0x0024;
         private const int  WM_DPICHANGED      = 0x02E0;
+        private const int  WM_ENTERSIZEMOVE   = 0x0231;
+        private const int  WM_EXITSIZEMOVE    = 0x0232;
+        // True while the user is inside the window's resize/move modal loop (dragging an edge).
+        // During the loop we only transform-scale the page (smooth, no re-render); the single crisp
+        // re-render runs once on WM_EXITSIZEMOVE instead of thrashing on every size tick.
+        private bool _inResizeLoop;
         private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
         private const uint SWP_NOZORDER       = 0x0004;
         private const uint SWP_NOACTIVATE     = 0x0010;
@@ -1197,6 +1255,20 @@ namespace KillerPDF
                         int idx = PageList.SelectedIndex;
                         if (idx >= 0) RenderPage(idx);
                     }));
+            }
+            else if (msg == WM_ENTERSIZEMOVE)
+            {
+                _inResizeLoop = true;   // suppress per-tick re-renders; only transform-scale while dragging
+            }
+            else if (msg == WM_EXITSIZEMOVE)
+            {
+                // Drag finished: one crisp re-render for the final size. (No-op for a pure window MOVE,
+                // since no SizeChanged fired and the fit mode/zoom are unchanged.)
+                bool wasResizing = _inResizeLoop;
+                _inResizeLoop = false;
+                if (wasResizing)
+                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                        (Action)OnResizeSettled);
             }
             else if (msg == WM_NCHITTEST && WindowState == WindowState.Normal)
             {
@@ -1430,13 +1502,16 @@ namespace KillerPDF
         private void PositionAnnotationBar(Border bar, Grid area)
         {
             double w = bar.ActualWidth;
-            if (w <= 0) return;
             // The document's vertical scrollbar lives on the right edge of the area. Keep the bar clear
             // of it when it's showing; when it isn't, the bar can use the full edge.
             double sb = VerticalScrollBarInset();
             double maxLeft = Math.Max(0, area.ActualWidth - w);
             if (_annotBarCenterFrac is double frac)
             {
+                // Centre-parking needs a real measured width to place; edge anchors below don't, so they
+                // must still run on a freshly-rebuilt (unmeasured) bar - otherwise a same-tool refresh
+                // (e.g. clicking Bold) reveals the new bar at the default right edge, over the scrollbar.
+                if (w <= 0) return;
                 // Parked away from both edges: keep the same fraction of the width so it scales smoothly
                 // with the window instead of lurching toward an edge. Clamp so it never slides under the
                 // scrollbar on the right.
@@ -1698,44 +1773,432 @@ namespace KillerPDF
         /// print preview) can paint the same texture over their document area.</summary>
         public ImageSource? GrainTexture => GrainBrush?.ImageSource;
 
+        // One shared ContextMenu instance; its items are rebuilt on every open to match whatever is
+        // under the cursor (a specific annotation -> per-type actions; empty page -> page-level actions).
+        private ContextMenu _ctxMenu = null!;
+
         private void BuildContextMenu()
         {
-            var menu = new ContextMenu();
-            TextOptions.SetTextFormattingMode(menu, TextFormattingMode.Display);
-            TextOptions.SetTextRenderingMode(menu, TextRenderingMode.Grayscale);
+            _ctxMenu = new ContextMenu();
+            TextOptions.SetTextFormattingMode(_ctxMenu, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(_ctxMenu, TextRenderingMode.Grayscale);
+            _annotationCanvas.ContextMenu = _ctxMenu;
 
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_CopyText"), (s, e) => CopySelectedText(), "Ctrl+C"));
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Print"), (s, e) => Print_Click(s!, e), "Ctrl+P"));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_SelectTool"), (s, e) => SetTool(EditTool.Select)));
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_TextTool"), (s, e) => SetTool(EditTool.Text)));
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_HighlightTool"), (s, e) => SetTool(EditTool.Highlight)));
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DrawTool"), (s, e) => SetTool(EditTool.Draw)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCW"),  (s, e) => RotatePages_Click(90)));
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCCW"), (s, e) => RotatePages_Click(-90)));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_StampNumbers"), (s, e) => StampPageNumbers()));
-            menu.Items.Add(new Separator());
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DeleteSel"), (s, e) => DeleteSelected(), "Delete"));
-            // Unpair a selected text/cover pair (shown only when a paired item is selected).
-            _ctxUnpairItem = MakeMenuItem("Unpair text + cover", (s, e) => UnpairSelected());
-            menu.Items.Add(_ctxUnpairItem);
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_UndoLast"), (s, e) => Undo_Click(s!, e), "Ctrl+Z"));
-            menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_ClearPage"), (s, e) => ClearAnnotations_Click(s!, e)));
-
-            // Toggle context-dependent items each time the menu opens (works for both the auto right-click
-            // on the primary canvas and the per-tile overlays that open this same menu programmatically).
-            menu.Opened += (s, e) =>
-            {
-                if (_ctxUnpairItem is not null)
-                    _ctxUnpairItem.Visibility = SelectedPaired() is not null ? Visibility.Visible : Visibility.Collapsed;
-            };
-
-            _annotationCanvas.ContextMenu = menu;
+            // The primary canvas opens its menu automatically on right-click; rebuild items first based
+            // on the cursor position. The per-tile overlays call PopulateContextMenu themselves (they open
+            // the menu programmatically, which does not raise ContextMenuOpening).
+            _annotationCanvas.ContextMenuOpening += (s, e) =>
+                PopulateContextMenu(Mouse.GetPosition(_annotationCanvas), PageList.SelectedIndex);
         }
 
-        private MenuItem? _ctxUnpairItem;
+        // Rebuild the shared context menu for a right-click at canvas point pt on the given page. If an
+        // annotation sits under the cursor it is selected and gets a menu tailored to its type; otherwise
+        // the page-level menu (tools, rotate, stamp, undo, clear) is shown.
+        private void PopulateContextMenu(Point pt, int pageIdx)
+        {
+            _ctxMenu.Items.Clear();
+            var hit = AnnotationAt(pt, pageIdx);
+            if (hit is not null)
+            {
+                // Target this annotation: select it unless it's already part of the current selection
+                // (so right-clicking one of several selected items doesn't collapse the multi-selection).
+                // A grouped annotation selects its whole group so the menu acts on the group.
+                if (!ReferenceEquals(hit, _selectedAnnotation) && !_selectedSet.Contains(hit))
+                {
+                    if (hit.GroupId.Length > 0)
+                        SelectGroup(hit);
+                    else
+                    {
+                        ClearSelection();
+                        RenderAllAnnotations(pageIdx);
+                        SelectAnnotation(hit, AnnotBounds(hit));
+                    }
+                }
+                AddAnnotationMenuItems(hit);
+            }
+            else AddPageMenuItems();
+        }
+
+        // Topmost draggable annotation under pt on the given page, or null. Mirrors the click-select loop
+        // (reverse order = topmost first) so the menu targets exactly what a left-click would select.
+        private PageAnnotation? AnnotationAt(Point pt, int pageIdx)
+        {
+            if (pageIdx < 0 || !_annotations.TryGetValue(pageIdx, out var list)) return null;
+            for (int i = list.Count - 1; i >= 0; i--)
+                if (IsDraggable(list[i]) && HitTestAnnotation(list[i], pt, out _)) return list[i];
+            return null;
+        }
+
+        // A short human label for the kind of annotation right-clicked, shown as a disabled menu header.
+        private static string AnnotationKindLabel(PageAnnotation a) => a switch
+        {
+            CoverAnnotation => "Cover",
+            TextAnnotation => "Text box",
+            InkAnnotation => "Drawing",
+            SignatureAnnotation => "Signature",
+            ImageAnnotation => "Image",
+            HighlightAnnotation h => h.Style switch
+            {
+                HighlightStyle.Strikethrough => "Strikethrough",
+                HighlightStyle.Underline => "Underline",
+                _ => "Highlight"
+            },
+            _ => "Annotation"
+        };
+
+        // Per-type menu for a clicked annotation. Page-level items (tools, rotate, stamp) are omitted.
+        private void AddAnnotationMenuItems(PageAnnotation hit)
+        {
+            bool multi = SelectionCount() > 1;
+
+            // Edit sits at the top of every single-annotation menu (completes the menu). For a text box it
+            // lifts the text into an editable box; for other types it just ensures the editing bar is open.
+            if (!multi)
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Edit"), (s, e) => EditAnnotation(hit)));
+
+            // Raise / Lower one visual layer. Enabled only when something actually overlaps in that
+            // direction (so they're greyed out when nothing is stacked above / below at this spot).
+            int idx = -1;
+            _annotations.TryGetValue(hit.PageIndex, out var pageList);
+            if (pageList is not null) idx = pageList.IndexOf(hit);
+            var raise = MakeMenuItem(Loc("Str_Ctx_Raise"), (s, e) => MoveAnnotationLayer(hit, +1));
+            raise.IsEnabled = pageList is not null && idx >= 0 && OverlapNeighbor(pageList, idx, hit, +1) >= 0;
+            _ctxMenu.Items.Add(raise);
+            var lower = MakeMenuItem(Loc("Str_Ctx_Lower"), (s, e) => MoveAnnotationLayer(hit, -1));
+            lower.IsEnabled = pageList is not null && idx >= 0 && OverlapNeighbor(pageList, idx, hit, -1) >= 0;
+            _ctxMenu.Items.Add(lower);
+
+            // Pairing: on a single paired item, offer to jump to its other half. Unpair shows whenever the
+            // selection contains a pair - including when both halves are selected together (or as a group).
+            if (hit.PairId.Length > 0 && !multi)
+            {
+                var partner = PairPartner(hit);
+                if (partner is not null)
+                    _ctxMenu.Items.Add(MakeMenuItem(
+                        Loc(partner is CoverAnnotation ? "Str_Ctx_SelectCover" : "Str_Ctx_SelectText"),
+                        (s, e) => SelectPartner(hit)));
+            }
+            if (SelectedPaired() is not null)
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Unpair"), (s, e) => UnpairSelected()));
+
+            // Grouping: group an ad-hoc multi-selection, or - on a grouped item - drop just this one
+            // (Remove from group) or dissolve the whole group (Ungroup).
+            if (hit.GroupId.Length > 0)
+            {
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RemoveFromGroup"), (s, e) => RemoveFromGroup(hit)));
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Ungroup"), (s, e) => UngroupAnnotation(hit)));
+            }
+            else if (multi)
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Group"), (s, e) => GroupSelected()));
+
+            _ctxMenu.Items.Add(new Separator());
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Copy"), (s, e) => CopySelectedAnnotations(), "Ctrl+C"));
+            if (_annotationClipboard.Count > 0)
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Paste"), (s, e) => PasteAnnotations(hit.PageIndex), "Ctrl+V"));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DeleteSel"), (s, e) => DeleteSelected(), "Delete"));
+        }
+
+        // Page-level menu shown when the right-click lands on empty page space (no annotation under it).
+        private void AddPageMenuItems()
+        {
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_CopyText"), (s, e) => CopySelectedText(), "Ctrl+C"));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Print"), (s, e) => Print_Click(s!, e), "Ctrl+P"));
+            _ctxMenu.Items.Add(new Separator());
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_SelectTool"), (s, e) => SetTool(EditTool.Select)));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_TextTool"), (s, e) => SetTool(EditTool.Text)));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_HighlightTool"), (s, e) => SetTool(EditTool.Highlight)));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DrawTool"), (s, e) => SetTool(EditTool.Draw)));
+            _ctxMenu.Items.Add(new Separator());
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCW"),  (s, e) => RotatePages_Click(90)));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_RotateCCW"), (s, e) => RotatePages_Click(-90)));
+            _ctxMenu.Items.Add(new Separator());
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_StampNumbers"), (s, e) => StampPageNumbers()));
+            _ctxMenu.Items.Add(new Separator());
+            if (_annotationClipboard.Count > 0)
+                _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Paste"), (s, e) => PasteAnnotations(PageList.SelectedIndex), "Ctrl+V"));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_DeleteSel"), (s, e) => DeleteSelected(), "Delete"));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_UndoLast"), (s, e) => Undo_Click(s!, e), "Ctrl+Z"));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_ClearPage"), (s, e) => ClearAnnotations_Click(s!, e)));
+        }
+
+        // Nearest annotation that visually overlaps `a`, searching up (dir>0) or down (dir<0) the page's
+        // z-order list from a's index. Returns its list index, or -1 if nothing overlaps in that direction.
+        // "Layer" order is judged by what actually sits on top of / under a at its location, so Raise/Lower
+        // step past only the things stacked with it - not unrelated annotations elsewhere on the page.
+        private int OverlapNeighbor(List<PageAnnotation> list, int i, PageAnnotation a, int dir)
+        {
+            var ab = AnnotBounds(a);
+            if (dir > 0)
+            {
+                for (int k = i + 1; k < list.Count; k++)
+                    if (AnnotBounds(list[k]).IntersectsWith(ab)) return k;
+            }
+            else
+            {
+                for (int k = i - 1; k >= 0; k--)
+                    if (AnnotBounds(list[k]).IntersectsWith(ab)) return k;
+            }
+            return -1;
+        }
+
+        // Raise (+1) or Lower (-1) an annotation one visual layer: move it just past the nearest annotation
+        // that overlaps it in that direction. No-op when nothing overlaps above / below. Later in the list
+        // = drawn on top.
+        private void MoveAnnotationLayer(PageAnnotation a, int dir)
+        {
+            if (!_annotations.TryGetValue(a.PageIndex, out var list)) return;
+            int i = list.IndexOf(a);
+            if (i < 0) return;
+            int target = OverlapNeighbor(list, i, a, dir);
+            if (target < 0) return;
+            PushPageSnapshotUndo(a.PageIndex);
+            list.RemoveAt(i);
+            list.Insert(target, a);   // after removal, inserting at the neighbor's old index lands a past it
+            RenderAllAnnotations(a.PageIndex);
+            ReattachSelectionVisuals();
+            MarkDirty();
+        }
+
+        // Annotations copied via the context menu, held as page-independent deep clones until pasted.
+        private readonly List<PageAnnotation> _annotationClipboard = [];
+
+        // Deep-copy an annotation so the clipboard (and paste) is fully independent of the live object.
+        // CoverAnnotation must be matched before HighlightAnnotation since it derives from it.
+        private static PageAnnotation? CloneAnnotation(PageAnnotation a) => a switch
+        {
+            CoverAnnotation c => new CoverAnnotation
+            {
+                PageIndex = c.PageIndex, PairId = c.PairId, GroupId = c.GroupId, Bounds = c.Bounds, Style = c.Style,
+                ColorR = c.ColorR, ColorG = c.ColorG, ColorB = c.ColorB, ColorA = c.ColorA
+            },
+            HighlightAnnotation h => new HighlightAnnotation
+            {
+                PageIndex = h.PageIndex, PairId = h.PairId, GroupId = h.GroupId, Bounds = h.Bounds, Style = h.Style,
+                ColorR = h.ColorR, ColorG = h.ColorG, ColorB = h.ColorB, ColorA = h.ColorA
+            },
+            TextAnnotation t => new TextAnnotation
+            {
+                PageIndex = t.PageIndex, PairId = t.PairId, GroupId = t.GroupId, Position = t.Position, Content = t.Content,
+                FontSize = t.FontSize, FontName = t.FontName, Bold = t.Bold, Italic = t.Italic,
+                Strike = t.Strike, Underline = t.Underline,
+                Width = t.Width, Height = t.Height,
+                ColorR = t.ColorR, ColorG = t.ColorG, ColorB = t.ColorB, ColorA = t.ColorA,
+                BgR = t.BgR, BgG = t.BgG, BgB = t.BgB, BgA = t.BgA
+            },
+            InkAnnotation ink => new InkAnnotation
+            {
+                PageIndex = ink.PageIndex, PairId = ink.PairId, GroupId = ink.GroupId, Points = [.. ink.Points],
+                StrokeWidth = ink.StrokeWidth,
+                ColorR = ink.ColorR, ColorG = ink.ColorG, ColorB = ink.ColorB, ColorA = ink.ColorA
+            },
+            SignatureAnnotation s => new SignatureAnnotation
+            {
+                PageIndex = s.PageIndex, PairId = s.PairId, GroupId = s.GroupId, Position = s.Position, Scale = s.Scale,
+                SourceWidth = s.SourceWidth, SourceHeight = s.SourceHeight,
+                Strokes = s.Strokes.Select(st => new List<Point>(st)).ToList(),
+                StrokeWidth = s.StrokeWidth, ImageData = s.ImageData
+            },
+            ImageAnnotation img => new ImageAnnotation
+            {
+                PageIndex = img.PageIndex, PairId = img.PairId, GroupId = img.GroupId, Position = img.Position, Scale = img.Scale,
+                SourceWidth = img.SourceWidth, SourceHeight = img.SourceHeight, ImageData = img.ImageData
+            },
+            _ => null
+        };
+
+        // Copy the current selection (primary or multi-select) into the annotation clipboard.
+        private void CopySelectedAnnotations()
+        {
+            var sel = new List<PageAnnotation>();
+            if (_selectedAnnotation is not null) sel.Add(_selectedAnnotation);
+            foreach (var a in _selectedSet) if (!sel.Contains(a)) sel.Add(a);
+            if (sel.Count == 0) return;
+
+            _annotationClipboard.Clear();
+            foreach (var a in sel)
+                if (CloneAnnotation(a) is { } c) _annotationClipboard.Add(c);
+
+            SetStatus(_annotationClipboard.Count == 1
+                ? "Copied 1 annotation" : $"Copied {_annotationClipboard.Count} annotations");
+        }
+
+        // Paste the clipboard onto pageIdx: fresh clones nudged down-right so they don't sit exactly on
+        // the originals, clamped on-page, added (each its own undo step) and left selected. A pasted
+        // text/cover pair keeps its pairing internally but is regenerated so it's independent of the source.
+        private void PasteAnnotations(int pageIdx)
+        {
+            if (_annotationClipboard.Count == 0 || pageIdx < 0) return;
+            const double off = 14;
+
+            var pasted = new List<PageAnnotation>();
+            var pairMap = new Dictionary<string, string>();
+            var groupMap = new Dictionary<string, string>();
+            foreach (var src in _annotationClipboard)
+            {
+                if (CloneAnnotation(src) is not { } c) continue;
+                c.PageIndex = pageIdx;
+                // Remap pairing and grouping so the pasted set stays internally linked but independent
+                // of the originals (a copied group/pair pastes as its own new group/pair).
+                if (c.PairId.Length > 0)
+                {
+                    if (!pairMap.TryGetValue(c.PairId, out var np))
+                    {
+                        np = Guid.NewGuid().ToString("N");
+                        pairMap[c.PairId] = np;
+                    }
+                    c.PairId = np;
+                }
+                if (c.GroupId.Length > 0)
+                {
+                    if (!groupMap.TryGetValue(c.GroupId, out var ng))
+                    {
+                        ng = Guid.NewGuid().ToString("N");
+                        groupMap[c.GroupId] = ng;
+                    }
+                    c.GroupId = ng;
+                }
+                AnnotSetPos(c, new Point(AnnotGetPos(c).X + off, AnnotGetPos(c).Y + off));
+                AnnotSetPos(c, ClampAnnotPos(c));
+                pasted.Add(c);
+            }
+            if (pasted.Count == 0) return;
+
+            ClearSelection();
+            foreach (var c in pasted) AddAnnotation(c);
+            RenderAllAnnotations(pageIdx);
+
+            var canvas = CanvasForPage(pageIdx);
+            _activeCanvas = canvas;
+            if (pasted.Count == 1)
+                SelectAnnotation(pasted[0], AnnotBounds(pasted[0]));
+            else
+                foreach (var c in pasted) ToggleMultiSelect(c, AnnotBounds(c), canvas);
+
+            SetStatus(pasted.Count == 1 ? "Pasted 1 annotation" : $"Pasted {pasted.Count} annotations");
+        }
+
+        // --- Edit / pairing / grouping menu actions ------------------------------------------------
+
+        // Other members of a group are moved alongside the primary during a drag; this holds each one
+        // with the position it had when the drag began so the whole group translates rigidly.
+        private readonly List<(PageAnnotation a, Point orig)> _dragGroupOrig = [];
+
+        // "Edit" menu action: inline-edit a text box. For any other annotation, selecting it (which the
+        // right-click already did) opened its color/size bar, so there's nothing more to do here.
+        private void EditAnnotation(PageAnnotation hit)
+        {
+            if (hit is TextAnnotation ta)
+            {
+                var p = new Point(ta.Position.X + Math.Min(Math.Max(ta.Width, 8) / 2, 10),
+                                  ta.Position.Y + Math.Min(Math.Max(ta.Height, 8) / 2, 8));
+                EditTextAtPosition(p, ta.PageIndex);
+            }
+        }
+
+        // The other half of a text/cover pair, if any.
+        private PageAnnotation? PairPartner(PageAnnotation a)
+        {
+            if (a.PairId.Length == 0 || !_annotations.TryGetValue(a.PageIndex, out var list)) return null;
+            return list.FirstOrDefault(x => !ReferenceEquals(x, a) && x.PairId == a.PairId);
+        }
+
+        // Switch the selection from one half of a pair to the other.
+        private void SelectPartner(PageAnnotation a)
+        {
+            var p = PairPartner(a);
+            if (p is null) return;
+            ClearSelection();
+            RenderAllAnnotations(p.PageIndex);
+            _activeCanvas = CanvasForPage(p.PageIndex);
+            SelectAnnotation(p, AnnotBounds(p));
+        }
+
+        // Select an annotation and, if it's grouped, every other member of its group - so the whole group
+        // shows selected and can move together. The lead is the primary selection; the rest get outlines.
+        private void SelectGroup(PageAnnotation lead)
+        {
+            int pg = lead.PageIndex;
+            ClearSelection();
+            RenderAllAnnotations(pg);
+            _activeCanvas = CanvasForPage(pg);
+            SelectAnnotation(lead, AnnotBounds(lead));
+            // Inside a group the paired cover is itself a selected member with its own outline, so the
+            // dashed "paired" hint SelectAnnotation may have drawn is redundant - and it wouldn't track the
+            // group during a drag, leaving a stray dashed box behind. Drop it.
+            if (_pairedCoverOutline is not null)
+            {
+                (_pairedCoverOutline.Parent as Canvas)?.Children.Remove(_pairedCoverOutline);
+                _pairedCoverOutline = null;
+            }
+            if (lead.GroupId.Length > 0 && _annotations.TryGetValue(pg, out var list))
+                foreach (var m in list)
+                    if (!ReferenceEquals(m, lead) && m.GroupId == lead.GroupId)
+                    {
+                        _selectedSet.Add(m);
+                        AddSelectionOutline(AnnotBounds(m), _activeCanvas);
+                    }
+        }
+
+        // Rebuild the multi-selection outlines at the set members' current bounds. Used while dragging a
+        // group, since RenderAllAnnotations wipes the canvas (and the outlines) on every tick.
+        private void ReattachMultiOutlines()
+        {
+            foreach (var o in _selectionOutlines) (o.Parent as Canvas)?.Children.Remove(o);
+            _selectionOutlines.Clear();
+            foreach (var a in _selectedSet)
+                AddSelectionOutline(AnnotBounds(a), CanvasForPage(a.PageIndex));
+        }
+
+        // Group every currently-selected annotation under a fresh group id (they move together afterward).
+        // Grouping is a layer above pairing: a text/cover pair's partner is pulled in automatically so the
+        // pair always groups as a unit, and ungrouping later leaves the underlying pairing untouched.
+        private void GroupSelected()
+        {
+            var sel = new List<PageAnnotation>();
+            if (_selectedAnnotation is not null) sel.Add(_selectedAnnotation);
+            foreach (var a in _selectedSet) if (!sel.Contains(a)) sel.Add(a);
+            foreach (var a in sel.ToList())
+                if (PairPartner(a) is { } p && !sel.Contains(p)) sel.Add(p);
+            if (sel.Count < 2) return;
+            PushPagesSnapshotUndo(sel.Select(a => a.PageIndex));
+            string gid = Guid.NewGuid().ToString("N");
+            foreach (var a in sel) a.GroupId = gid;
+            MarkDirty();
+            SetStatus($"Grouped {sel.Count} annotations - they now move together");
+        }
+
+        // Break a group: clear the shared group id on every member.
+        private void UngroupAnnotation(PageAnnotation a)
+        {
+            if (a.GroupId.Length == 0) return;
+            PushPageSnapshotUndo(a.PageIndex);
+            string gid = a.GroupId;
+            if (_annotations.TryGetValue(a.PageIndex, out var list))
+                foreach (var m in list) if (m.GroupId == gid) m.GroupId = "";
+            MarkDirty();
+            SetStatus("Ungrouped");
+        }
+
+        // Drop a single annotation out of its group, leaving the rest grouped. If that leaves only one
+        // member, the group is meaningless, so dissolve it too. The removed item is left selected alone.
+        private void RemoveFromGroup(PageAnnotation a)
+        {
+            if (a.GroupId.Length == 0) return;
+            PushPageSnapshotUndo(a.PageIndex);
+            string gid = a.GroupId;
+            a.GroupId = "";
+            if (_annotations.TryGetValue(a.PageIndex, out var list))
+            {
+                var remaining = list.Where(x => x.GroupId == gid).ToList();
+                if (remaining.Count == 1) remaining[0].GroupId = "";
+            }
+            MarkDirty();
+            ClearSelection();
+            RenderAllAnnotations(a.PageIndex);
+            _activeCanvas = CanvasForPage(a.PageIndex);
+            SelectAnnotation(a, AnnotBounds(a));
+            SetStatus("Removed from group");
+        }
 
         // The selected annotation (primary or multi-select) that belongs to a text/cover pair, if any.
         private PageAnnotation? SelectedPaired()
@@ -1745,25 +2208,34 @@ namespace KillerPDF
             return null;
         }
 
-        // Break a text/cover pairing: clear the shared id on both halves so they become independent (the
-        // cover stops rendering dashed and no longer shows when its former partner is selected).
+        // Break text/cover pairing for every pair represented in the current selection - so it works for a
+        // single paired item, both halves selected together, or a group containing one or more pairs. Each
+        // affected cover stops rendering dashed and no longer shows when its former partner is selected.
         private void UnpairSelected()
         {
-            var a = SelectedPaired();
-            if (a is null) return;
-            string pid = a.PairId;
-            int pg = a.PageIndex;
-            if (_annotations.TryGetValue(pg, out var list))
-                foreach (var x in list) if (x.PairId == pid) x.PairId = "";
+            var sel = new List<PageAnnotation>();
+            if (_selectedAnnotation is not null) sel.Add(_selectedAnnotation);
+            foreach (var a in _selectedSet) if (!sel.Contains(a)) sel.Add(a);
+            var pids = sel.Where(a => a.PairId.Length > 0).Select(a => a.PairId).Distinct().ToHashSet();
+            if (pids.Count == 0) return;
+            PushPagesSnapshotUndo(sel.Select(a => a.PageIndex));
+
+            var pages = new HashSet<int>();
+            foreach (var kv in _annotations)
+                foreach (var x in kv.Value)
+                    if (pids.Contains(x.PairId)) { x.PairId = ""; pages.Add(kv.Key); }
+
             if (_pairedCoverOutline is not null)
             {
                 (_pairedCoverOutline.Parent as Canvas)?.Children.Remove(_pairedCoverOutline);
                 _pairedCoverOutline = null;
             }
-            RenderAllAnnotations(pg);
-            ReattachSelectionVisuals();   // keep the current box's selection chrome after the repaint
+            foreach (var p in pages) RenderAllAnnotations(p);
+            ReattachSelectionVisuals();   // keep the current selection chrome after the repaint
             MarkDirty();
-            SetStatus("Unpaired - the text and cover are now separate");
+            SetStatus(pids.Count == 1
+                ? "Unpaired - the text and cover are now separate"
+                : $"Unpaired {pids.Count} text/cover pairs");
         }
 
         private void PageList_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
@@ -2915,6 +3387,9 @@ namespace KillerPDF
                 if (_viewMode != ViewMode.TwoPage) PageList.SelectedIndex = capturedPi;
                 if (_annotationCanvas.ContextMenu is ContextMenu cm)
                 {
+                    // Selection chrome draws on _activeCanvas, so point it at this tile before populating.
+                    _activeCanvas = (Canvas)s;
+                    PopulateContextMenu(ev.GetPosition((Canvas)s), capturedPi);
                     cm.PlacementTarget = (UIElement)s;
                     cm.IsOpen = true;
                     ev.Handled = true;
@@ -4301,6 +4776,7 @@ namespace KillerPDF
             EditTool.Strikethrough => Cursors.Cross,
             EditTool.Underline => Cursors.Cross,
             EditTool.Draw => Cursors.Pen,
+            EditTool.Line => Cursors.Cross,
             EditTool.Signature => Cursors.Pen,
             EditTool.Image => Cursors.Hand,
             EditTool.Crop => Cursors.Cross,
@@ -4329,8 +4805,8 @@ namespace KillerPDF
                 (_toolSelectBtn, EditTool.Select),
                 (_toolTextBtn, EditTool.Text),
                 (_toolHighlightBtn, EditTool.Highlight),
-                (_toolStrikeBtn, EditTool.Strikethrough),
-                (_toolUnderlineBtn, EditTool.Underline),
+                (_toolStrikeBtn, EditTool.Strikethrough),   // button hidden; Line replaced it
+                (_toolUnderlineBtn, EditTool.Line),          // the old Underline button is now the Line tool
                 (_toolDrawBtn, EditTool.Draw),
                 (_toolSignatureBtn, EditTool.Signature),
                 (_toolImageBtn, EditTool.Image),
@@ -4362,7 +4838,7 @@ namespace KillerPDF
                 overlay.Cursor = toolCursor;
 
             // Show/hide draw settings bar
-            if (tool == EditTool.Draw || tool == EditTool.Highlight
+            if ((tool is EditTool.Draw or EditTool.Line) || tool == EditTool.Highlight
                 || tool == EditTool.Strikethrough || tool == EditTool.Underline)
                 ShowDrawSettings(tool);
             else
@@ -4384,6 +4860,36 @@ namespace KillerPDF
             // Dismiss crop confirm bar when switching away from Crop
             if (tool != EditTool.Crop)
                 HideCropConfirmBar();
+
+            // NOTE: deliberately NOT reflowing the toolbar here. Reflowing on every tool switch at a narrow
+            // width visibly thrashes the whole bar. The active-tool protection still runs on resize (the
+            // next time the window changes width the active tool is pulled back onto the bar), which the
+            // user preferred over the jank.
+            UpdateOverflowActiveHighlight();   // mark the active tool in the overflow menu (cheap, no reflow)
+        }
+
+        // Tints the active tool's row in the overflow menu with the selection colors, so when a tool lives
+        // in the chevron (collapsed off the bar) you can still see which one is active - same cue as the
+        // highlighted icon on the bar. No-op for the rows that aren't tools.
+        private void UpdateOverflowActiveHighlight()
+        {
+            var map = new (Button mi, EditTool t)[]
+            {
+                (MiText, EditTool.Text), (MiUnderline, EditTool.Line), (MiHighlight, EditTool.Highlight),
+                (MiDraw, EditTool.Draw), (MiImage, EditTool.Image), (MiCrop, EditTool.Crop),
+                (MiSignature, EditTool.Signature),
+            };
+            foreach (var (mi, t) in map)
+            {
+                if (mi is null) continue;
+                bool active = t == _currentTool;
+                if (active) mi.SetResourceReference(Control.BackgroundProperty, "SelectionBg");
+                else mi.ClearValue(Control.BackgroundProperty);
+                if (mi.Content is Panel sp)
+                    foreach (var ch in sp.Children)
+                        if (ch is TextBlock tb)
+                            tb.SetResourceReference(TextBlock.ForegroundProperty, active ? "SelectionFg" : "TextPrimary");
+            }
         }
 
         private void SidebarToggle_Click(object sender, RoutedEventArgs e)
@@ -4512,7 +5018,7 @@ namespace KillerPDF
         private void SidebarPagesTab_Click(object sender, RoutedEventArgs e) => SwitchSidebarToPagesTab();
         private void SidebarOutlinesTab_Click(object sender, RoutedEventArgs e) => SwitchSidebarToOutlinesTab();
 
-        private const double SidebarMaxPages   = 300;
+        private const double SidebarMaxPages   = 234;   // stops when the 200px-capped thumbnail fills (200 + margins + scrollbar)
         private const double SidebarMaxOutlines = 480;
         private const double SidebarMinOpen     = 120;   // narrowest readable width before labels/header clip
 
@@ -4682,6 +5188,7 @@ namespace KillerPDF
         private void ToolHighlight_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Highlight);
         private void ToolStrike_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Strikethrough);
         private void ToolUnderline_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Underline);
+        private void ToolLine_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Line);
         private void ToolDraw_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Draw);
         private void ToolImage_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Image);
         private void ToolCrop_Click(object sender, RoutedEventArgs e) => SetTool(EditTool.Crop);
@@ -5492,10 +5999,18 @@ namespace KillerPDF
 
         // Lets the annotation bars slide horizontally along the top via their grip, clamped inside
         // the document area, with the X position remembered (shared across the draw/text bars).
-        private void EnableBarSlide(FrameworkElement grip, Border bar, FrameworkElement bounds)
+        private void EnableBarSlide(FrameworkElement grip, Border bar, FrameworkElement bounds, bool backgroundOnly = false)
         {
             grip.MouseLeftButtonDown += (s, e) =>
             {
+                // When wired on a content panel, only act on clicks that hit the panel's OWN background
+                // (empty gaps). A click on a child control (slider, swatch, combo) reports that child as
+                // the source, so we bail and let the control handle it - even controls that don't mark the
+                // event handled never start a drag. The grip / peek strip pass backgroundOnly=false.
+                if (backgroundOnly && !ReferenceEquals(e.OriginalSource, grip)) return;
+                // Double-click any draggable surface (grip, peek strip, or an empty area of the bar)
+                // toggles minimize - same gesture everywhere.
+                if (e.ClickCount == 2) { e.Handled = true; ToggleAnnotBarMinimized(); return; }
                 double w = bar.ActualWidth;
                 // Drag uniformly in left-edge coordinates whatever the current anchor; the edge it
                 // anchors to is decided on release from where it ends up.
@@ -5572,6 +6087,7 @@ namespace KillerPDF
         private double _annotBarFullHeight;    // remembered full height to expand back to
         private FrameworkElement? _annotBarContent;   // the bar's normal content (hidden while minimized)
         private FrameworkElement? _annotBarDots;      // grip-dots strip shown while minimized
+        private readonly List<FrameworkElement> _annotBarDragInners = new();   // nested panels whose empty areas also drag the bar
 
         // Positions an annotation bar and wires up sliding. If we already know the X (this session or
         // saved), set it synchronously so the bar appears in place; only the very first time do we
@@ -5596,6 +6112,12 @@ namespace KillerPDF
             EnableBarSlide(grip, bar, area);
             // The minimized peek strip drags the bar too, so a collapsed bar can be repositioned.
             if (_annotBarDots is not null) EnableBarSlide(_annotBarDots, bar, area);
+            // Empty areas of the bar content drag it too (and double-click them to minimize). The content
+            // panel(s) have a Transparent background, so only the gaps between controls trigger this -
+            // clicks that land on a slider/swatch/combo still go to that control.
+            if (_annotBarContent is not null) EnableBarSlide(_annotBarContent, bar, area, backgroundOnly: true);
+            foreach (var inner in _annotBarDragInners)
+                if (inner is not null) EnableBarSlide(inner, bar, area, backgroundOnly: true);
             // A freshly built bar has no measured width yet, so PositionAnnotationBar can't place it until
             // layout runs. Hide it for that one frame (Opacity 0 still lays out, so width measures), then
             // anchor and reveal it - otherwise it renders at its default right edge first and visibly
@@ -5629,6 +6151,65 @@ namespace KillerPDF
             }
         }
 
+        // Subtracts the annotate-bar chrome (padding + border + a gap from the scrollbar) from the document
+        // area's width, giving the wrap panel the width it's actually allowed to occupy before wrapping.
+        private static readonly InsetWidthConverter _barWidthInset = new();
+        private sealed class InsetWidthConverter : System.Windows.Data.IValueConverter
+        {
+            public object Convert(object value, Type t, object p, System.Globalization.CultureInfo c)
+                => value is double d ? Math.Max(0.0, d - 28.0) : value;
+            public object ConvertBack(object value, Type t, object p, System.Globalization.CultureInfo c) => value;
+        }
+
+        // Adapts a wrapping annotate bar to very narrow widths: once its content blocks can no longer sit on
+        // a single row, the drag grip is hidden (non-essential at that size) and the blocks gain a little
+        // vertical breathing room as they stack; the inline separators are hidden so they don't float as
+        // stray ticks between stacked rows. The single-row fit test deliberately uses only fixed quantities
+        // (block widths + a constant gap allowance, never the grip or separator visibility we toggle), so a
+        // toggle can never change the test result and oscillate.
+        private void WireBarWrapAdaptation(WrapPanel host, FrameworkElement grip, FrameworkElement primary,
+                                           FrameworkElement sizeSource)
+        {
+            // The grip only shrinks to a thin draggable nub once the grip + the first block can no longer
+            // share a row (the window's skinniest) - not merely when the bar wraps. The threshold is the
+            // grip + first-block widths, measured ONCE at full size and frozen, so shrinking the grip can
+            // never feed back into the decision and oscillate. Spacing between groups is handled by the
+            // groups' own margins (not separators), so it survives wrapping with no stray ticks.
+            double gripThreshold = 0;
+            Thickness gripFull = (grip as Border)?.Padding ?? new Thickness();
+            bool? lastGripMin = null;
+            void SetGripMinimized(bool min)
+            {
+                if (grip is not Border gb) return;
+                if (gb.Child is UIElement dots) dots.Visibility = min ? Visibility.Collapsed : Visibility.Visible;
+                gb.Padding = min ? new Thickness(1, 0, 2, 0) : gripFull;   // keep a few draggable px
+            }
+            void Apply()
+            {
+                double avail = host.MaxWidth;
+                if (double.IsNaN(avail) || double.IsInfinity(avail) || avail <= 0) return;
+                if (gripThreshold <= 0)
+                {
+                    double g = grip.DesiredSize.Width, p = primary.DesiredSize.Width;
+                    if (g <= 0 || p <= 0) return;   // not measured yet; a later pass will retry
+                    gripThreshold = g + p + 8.0;
+                }
+                bool gripMin = avail + 0.5 < gripThreshold;
+                if (lastGripMin == gripMin) return;
+                lastGripMin = gripMin;
+                SetGripMinimized(gripMin);
+            }
+            // Drive off the document area's width (the monotonic signal) rather than the panel's own size:
+            // once the grip shrinks and the bar fits a row again, the panel stops resizing, so only the
+            // source's width change tells us there is room to restore the grip. Unhook on teardown - the bar
+            // is rebuilt often (every swatch click), so a lingering handler would leak.
+            SizeChangedEventHandler onSource = (_, _) => Apply();
+            sizeSource.SizeChanged += onSource;
+            host.Unloaded += (_, _) => sizeSource.SizeChanged -= onSource;
+            host.SizeChanged += (_, _) => Apply();   // catches the first valid measurement
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)Apply);
+        }
+
         private void ShowDrawSettings(EditTool tool)
         {
             // Fade the bar in only when it's genuinely appearing (no bar yet, or coming from the text
@@ -5636,7 +6217,7 @@ namespace KillerPDF
             // Strikethrough / Draw) swaps it in place instantly - otherwise the two near-identical bars
             // crossfade through ~50% opacity and read as a blink even though nothing visually changed.
             bool prevWasDrawBar = _annotBarTool is EditTool.Draw or EditTool.Highlight
-                                                or EditTool.Underline or EditTool.Strikethrough;
+                                                or EditTool.Underline or EditTool.Strikethrough or EditTool.Line;
             bool appearing = _annotBarTool != tool && !prevWasDrawBar;
             if (_drawSettingsBar is not null)
             {
@@ -5647,25 +6228,80 @@ namespace KillerPDF
                 _drawSettingsBar = null;
             }
 
-            var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 2, 8, 2) };
+            // WrapPanel so that on a too-narrow window the control groups drop to a second/third row
+            // instead of overflowing. Its MaxWidth is pinned to the document area below so it knows when
+            // to wrap; controls are added in self-contained groups so a wrap never splits a label from
+            // its slider.
+            var panel = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 2, 8, 2), Background = Brushes.Transparent };
 
             // Drag grip so the bar can be slid left/right along the top.
             var drawGrip = MakeBarGrip();
             panel.Children.Add(drawGrip);
 
-            // Color label
+            // A small checkbox + label for the bar (Level on the Line tool, Eraser on Highlight / Draw).
+            // Toggling rebuilds the bar to reflect the new state.
+            StackPanel BarCheck(string label, bool active, string tip, Action onClick)
+            {
+                var p = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(2, 0, 18, 0), Cursor = Cursors.Hand, ToolTip = tip
+                };
+                var box = new Border
+                {
+                    Width = 15, Height = 15, CornerRadius = new CornerRadius(3),
+                    BorderThickness = new Thickness(active ? 0 : 1),
+                    Background = active ? AccentBrush() : Brushes.Transparent,
+                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0)
+                };
+                if (active)
+                    box.Child = new TextBlock
+                    {
+                        Text = "✓", Foreground = Brushes.White, FontSize = 10,
+                        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                    };
+                else box.BorderBrush = _swatchDimBorder;
+                var lbl = new TextBlock
+                {
+                    Text = label, FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                lbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+                p.Children.Add(box);
+                p.Children.Add(lbl);
+                p.MouseLeftButtonDown += (_, _) => onClick();
+                return p;
+            }
+            // Built here, added at the END of the bar (after Opacity) where there's more room than
+            // squeezed in before the color swatches.
+            StackPanel? barCheck = tool switch
+            {
+                EditTool.Line => BarCheck(Loc("Str_Bar_Level"), _lineLevel,
+                    "Keep the line on the nearest axis (horizontal or vertical)",
+                    () => { _lineLevel = !_lineLevel; ShowDrawSettings(tool); }),
+                EditTool.Highlight => BarCheck(Loc("Str_Bar_Eraser"), _highlightErase,
+                    "Drag a box to delete every annotation inside it",
+                    () => { _highlightErase = !_highlightErase; ShowDrawSettings(tool); }),
+                EditTool.Draw => BarCheck(Loc("Str_Bar_Eraser"), _drawErase,
+                    "Brush over annotations to delete them",
+                    () => { _drawErase = !_drawErase; ShowDrawSettings(tool); }),
+                _ => null
+            };
+
+            // Color group (label + swatches + more) - one wrap unit.
+            var colorGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 16, 2) };
             var colorLbl = new TextBlock
             {
-                Text = "Color:",
+                Text = Loc("Str_Bar_Color"),
                 FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
             };
             colorLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-            panel.Children.Add(colorLbl);
+            colorGroup.Children.Add(colorLbl);
 
             // Color swatches
             bool isLineTool = tool == EditTool.Strikethrough || tool == EditTool.Underline;
-            var activeColor = tool == EditTool.Draw ? _drawColor
+            var activeColor = (tool is EditTool.Draw or EditTool.Line) ? _drawColor
                             : isLineTool ? Color.FromRgb(_lineAnnotColor.R, _lineAnnotColor.G, _lineAnnotColor.B)
                             : Color.FromRgb(_highlightColor.R, _highlightColor.G, _highlightColor.B);
             foreach (var color in SwatchColors)
@@ -5688,7 +6324,7 @@ namespace KillerPDF
                 swatch.MouseLeftButtonDown += (s, e) =>
                 {
                     var c = (Color)((Border)s!).Tag;
-                    if (tool == EditTool.Draw)
+                    if ((tool is EditTool.Draw or EditTool.Line))
                         _drawColor = Color.FromArgb(_drawOpacity, c.R, c.G, c.B);
                     else if (isLineTool)
                         _lineAnnotColor = Color.FromArgb(_lineAnnotColor.A, c.R, c.G, c.B);
@@ -5697,14 +6333,14 @@ namespace KillerPDF
                     ApplyDrawStyleToSelection();   // edit the selected annotation, if any
                     ShowDrawSettings(tool); // refresh selection
                 };
-                panel.Children.Add(swatch);
+                colorGroup.Children.Add(swatch);
             }
 
             // "More colors..." -> full RGB picker, applied to whichever draw color this bar drives.
             var moreDraw = new Border
             {
                 Width = 18, Height = 18, CornerRadius = new CornerRadius(3), Margin = new Thickness(1),
-                Cursor = Cursors.Hand, BorderThickness = new Thickness(1), ToolTip = "More colors...",
+                Cursor = Cursors.Hand, BorderThickness = new Thickness(1), ToolTip = Loc("Str_Bar_MoreColors"),
                 BorderBrush = _swatchDimBorder,
                 Background = new LinearGradientBrush
                 {
@@ -5719,40 +6355,45 @@ namespace KillerPDF
             };
             moreDraw.MouseLeftButtonDown += (_, _) => OpenColorPicker(activeColor, c =>
             {
-                if (tool == EditTool.Draw)      _drawColor      = Color.FromArgb(_drawOpacity, c.R, c.G, c.B);
+                if ((tool is EditTool.Draw or EditTool.Line))      _drawColor      = Color.FromArgb(_drawOpacity, c.R, c.G, c.B);
                 else if (isLineTool)            _lineAnnotColor = Color.FromArgb(_lineAnnotColor.A, c.R, c.G, c.B);
                 else                            _highlightColor = Color.FromArgb(_highlightColor.A, c.R, c.G, c.B);
                 ApplyDrawStyleToSelection();
                 ShowDrawSettings(tool);
             }, () => ShowDrawSettings(tool));
-            panel.Children.Add(moreDraw);
+            colorGroup.Children.Add(moreDraw);
+            panel.Children.Add(colorGroup);
 
-            // Separator
-            var sep1 = new Rectangle { Width = 1, Margin = new Thickness(8, 2, 8, 2) };
-            sep1.SetResourceReference(Rectangle.FillProperty, "BorderDim");
-            panel.Children.Add(sep1);
+            // Left-to-right collapse: colorGroup stays on row 1 with the grip; Size and the Opacity+toggle
+            // unit live in a nested wrap panel that drops below colorGroup first, then splits Size / Opacity.
+            // Opacity and the Level/Eraser toggle share one unit so the toggle never lands on a row by itself.
+            var dRest = new WrapPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent };
+            var dOpacityUnit = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            _annotBarDragInners.Clear();
+            _annotBarDragInners.Add(dRest);
 
             // Size slider (draw only)
-            if (tool == EditTool.Draw)
+            if ((tool is EditTool.Draw or EditTool.Line))
             {
+                var sizeGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 16, 2) };
                 var sizeLbl = new TextBlock
                 {
-                    Text = "Size:",
+                    Text = Loc("Str_Bar_Size"),
                     FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
                 };
                 sizeLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-                panel.Children.Add(sizeLbl);
+                sizeGroup.Children.Add(sizeLbl);
 
                 var sizeSlider = new Slider
                 {
-                    Minimum = 1, Maximum = 20, Value = _drawWidth,
+                    Minimum = 1, Maximum = 60, Value = _drawWidth,
                     Width = 90, VerticalAlignment = VerticalAlignment.Center,
                     TickFrequency = 1, IsSnapToTickEnabled = true,
                     Style = (Style)FindResource("DarkSlider")
                 };
                 sizeSlider.ValueChanged += (s, e) => { _drawWidth = e.NewValue; ApplyDrawStyleToSelection(); };
-                panel.Children.Add(sizeSlider);
+                sizeGroup.Children.Add(sizeSlider);
 
                 var sizeLabel = new TextBlock
                 {
@@ -5763,24 +6404,22 @@ namespace KillerPDF
                 };
                 sizeLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
                 sizeSlider.ValueChanged += (s, e) => sizeLabel.Text = $"{e.NewValue:F0}px";
-                panel.Children.Add(sizeLabel);
-
-                var sep2 = new Rectangle { Width = 1, Margin = new Thickness(8, 2, 8, 2) };
-                sep2.SetResourceReference(Rectangle.FillProperty, "BorderDim");
-                panel.Children.Add(sep2);
+                sizeGroup.Children.Add(sizeLabel);
+                dRest.Children.Add(sizeGroup);
             }
 
-            // Opacity slider
+            // Opacity group (label + slider + value) - one wrap unit.
+            var opacityGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 16, 2) };
             var opacityLbl = new TextBlock
             {
-                Text = "Opacity:",
+                Text = Loc("Str_Bar_Opacity"),
                 FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
             };
             opacityLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-            panel.Children.Add(opacityLbl);
+            opacityGroup.Children.Add(opacityLbl);
 
-            byte currentOpacity = tool == EditTool.Draw ? _drawOpacity : isLineTool ? _lineAnnotColor.A : _highlightColor.A;
+            byte currentOpacity = (tool is EditTool.Draw or EditTool.Line) ? _drawOpacity : isLineTool ? _lineAnnotColor.A : _highlightColor.A;
             var opacitySlider = new Slider
             {
                 Minimum = 10, Maximum = 255, Value = currentOpacity,
@@ -5799,7 +6438,7 @@ namespace KillerPDF
             {
                 byte a = (byte)e.NewValue;
                 opacityLabel.Text = $"{(int)(a / 255.0 * 100)}%";
-                if (tool == EditTool.Draw)
+                if ((tool is EditTool.Draw or EditTool.Line))
                 {
                     _drawOpacity = a;
                     _drawColor = Color.FromArgb(a, _drawColor.R, _drawColor.G, _drawColor.B);
@@ -5814,8 +6453,19 @@ namespace KillerPDF
                 }
                 ApplyDrawStyleToSelection();   // edit the selected annotation, if any
             };
-            panel.Children.Add(opacitySlider);
-            panel.Children.Add(opacityLabel);
+            opacityGroup.Children.Add(opacitySlider);
+            opacityGroup.Children.Add(opacityLabel);
+            dOpacityUnit.Children.Add(opacityGroup);
+
+            // Level (Line) / Eraser (Highlight, Draw) toggle rides at the end of the Opacity unit, so it
+            // stays beside Opacity as the bar collapses instead of dropping onto a row by itself.
+            if (barCheck is not null)
+            {
+                barCheck.Margin = new Thickness(0, 2, 2, 2);
+                dOpacityUnit.Children.Add(barCheck);
+            }
+            dRest.Children.Add(dOpacityUnit);
+            panel.Children.Add(dRest);
 
             _drawSettingsBar = new Border
             {
@@ -5836,6 +6486,15 @@ namespace KillerPDF
             {
                 Panel.SetZIndex(_drawSettingsBar, 100);
                 previewArea.Children.Add(_drawSettingsBar);
+                // Cap the wrap panel to the document area's width (less the bar chrome) so it wraps the
+                // control groups to new rows once the window is too narrow to hold them on one line.
+                panel.SetBinding(FrameworkElement.MaxWidthProperty, new System.Windows.Data.Binding("ActualWidth")
+                { Source = previewArea, Converter = _barWidthInset });
+                // Same cap on the nested Size+Opacity panel so, once it has dropped to its own row, it
+                // splits Size / Opacity when that row is too narrow.
+                dRest.SetBinding(FrameworkElement.MaxWidthProperty, new System.Windows.Data.Binding("ActualWidth")
+                { Source = previewArea, Converter = _barWidthInset });
+                WireBarWrapAdaptation(panel, drawGrip, colorGroup, previewArea);
                 PlaceAnnotationBar(_drawSettingsBar, drawGrip, fadeIn: appearing);
             }
             _annotBarTool = tool;
@@ -5855,11 +6514,32 @@ namespace KillerPDF
         // Text tool settings bar
         // ============================================================
 
+        // Underline and/or strikethrough as one decoration collection (either, both, or none).
+        private static TextDecorationCollection? BuildDecorations(bool underline, bool strike)
+        {
+            if (!underline && !strike) return null;
+            var d = new TextDecorationCollection();
+            if (underline) foreach (var x in TextDecorations.Underline) d.Add(x);
+            if (strike) foreach (var x in TextDecorations.Strikethrough) d.Add(x);
+            return d;
+        }
+
+        // Apply the current typeface + Bold/Italic/Underline/Strikethrough to an in-canvas edit box, so
+        // editing stays WYSIWYG with the text bar. Bad font names fall back to Segoe UI rather than throwing.
+        private void StyleEditBox(TextBox tb)
+        {
+            try { tb.FontFamily = new FontFamily(_textFontName); } catch { tb.FontFamily = new FontFamily("Segoe UI"); }
+            tb.FontWeight = _textBold ? FontWeights.Bold : FontWeights.Normal;
+            tb.FontStyle = _textItalic ? FontStyles.Italic : FontStyles.Normal;
+            tb.TextDecorations = BuildDecorations(_textUnderline, _textStrike);
+        }
+
         private void ApplyTextStyleToActiveBox()
         {
             if (_activeTextBox is null) return;
             _activeTextBox.Foreground = new SolidColorBrush(_textColor);
             _activeTextBox.Background = TextEditBackground();   // reflect the chosen fill live
+            StyleEditBox(_activeTextBox);                       // typeface + B/I/S live
             int pg = _activeTextBox.Tag is int tp ? tp : PageList.SelectedIndex;
             double fontCanvas = _textFontSize;
             if (_doc is not null && pg >= 0 && _renderDims.TryGetValue(pg, out var rd) && rd.h > 0)
@@ -5904,6 +6584,11 @@ namespace KillerPDF
             {
                 ta.SetColor(_textColor);
                 ta.SetFill(_textFillColor);
+                ta.FontName = _textFontName;
+                ta.Bold = _textBold;
+                ta.Italic = _textItalic;
+                ta.Strike = _textStrike;
+                ta.Underline = _textUnderline;
                 double sy = 1.0;
                 if (_doc is not null && _renderDims.TryGetValue(ta.PageIndex, out var rd) && rd.h > 0)
                     sy = _doc.Pages[ta.PageIndex].Height.Point / rd.h;
@@ -5956,21 +6641,30 @@ namespace KillerPDF
                 _textSettingsBar = null;
             }
 
-            // Two aligned rows in a Grid: text row (Color | Size | Opacity) over fill row
-            // (Fill | gap | Fill Opacity). Shared Auto columns line the swatches up under each other and
-            // the Fill Opacity slider directly under the Opacity slider; the empty middle of the fill
-            // row (under Size) is left as a grabbable strip.
-            var grid = new Grid { Margin = new Thickness(8, 2, 8, 2) };
-            for (int ci = 0; ci < 9; ci++)
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            void Place(UIElement el, int r, int col, int span = 1)
+            // Three self-contained 2-row blocks (Size/Font, Color/Fill, Opacity/Fill-Opacity) laid out in a
+            // WrapPanel (built at the end) so they sit on one line when wide and drop to extra rows when the
+            // window is too narrow - a wrap never splits a paired row, since each pair lives inside one block.
+            Grid Block(int cols)
+            {
+                var g = new Grid { VerticalAlignment = VerticalAlignment.Center };
+                for (int ci = 0; ci < cols; ci++) g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                return g;
+            }
+            var gLeft = Block(1);
+            var gPalette = Block(2);
+            var gOpacity = Block(3);
+            // Right margin = the gap to the next block; top/bottom = the gap when blocks wrap to new rows.
+            gLeft.Margin = new Thickness(0, 2, 16, 2);
+            gPalette.Margin = new Thickness(0, 2, 16, 2);
+            gOpacity.Margin = new Thickness(0, 2, 0, 2);
+            void Place(Grid g, UIElement el, int r, int col, int span = 1)
             {
                 Grid.SetRow(el, r);
                 Grid.SetColumn(el, col);
                 if (span > 1) Grid.SetColumnSpan(el, span);
-                grid.Children.Add(el);
+                g.Children.Add(el);
             }
             TextBlock DimLabel(string text, int top, bool rightAlign = false)
             {
@@ -6001,17 +6695,11 @@ namespace KillerPDF
                 sw.MouseLeftButtonDown += onClick;
                 return sw;
             }
-            Rectangle Sep()
-            {
-                var s = new Rectangle { Width = 1, Margin = new Thickness(8, 2, 8, 2) };
-                s.SetResourceReference(Rectangle.FillProperty, "BorderDim");
-                return s;
-            }
             // Opens the full RGB picker. When the current color isn't one of the presets it shows that
             // color with an accent ring (and a small rainbow corner), so the bar reflects a custom pick.
             Grid MoreColorsSwatch(Color current, bool customActive, MouseButtonEventHandler onClick)
             {
-                var grid = new Grid { Width = 18, Height = 18, Margin = new Thickness(1), Cursor = Cursors.Hand, ToolTip = "More colors..." };
+                var grid = new Grid { Width = 18, Height = 18, Margin = new Thickness(1), Cursor = Cursors.Hand, ToolTip = Loc("Str_Bar_MoreColors") };
                 var bg = new Border
                 {
                     CornerRadius = new CornerRadius(3), BorderThickness = new Thickness(customActive ? 2 : 1),
@@ -6035,12 +6723,11 @@ namespace KillerPDF
             // 4 dots since this bar is double height.
             var textGrip = MakeBarGrip(4);
             textGrip.VerticalAlignment = VerticalAlignment.Center;
-            Place(textGrip, 0, 0);
-            Grid.SetRowSpan(textGrip, 2);
+            // (grip is added to the WrapPanel host directly, below.)
 
-            // Labels, col 1.
-            Place(DimLabel("Color:", 0), 0, 1);
-            Place(DimLabel("Fill:", 4), 1, 1);
+            // Color / Fill labels live in the palette block (col 0), with the swatch rows in col 1.
+            Place(gPalette, DimLabel(Loc("Str_Bar_Color"), 0), 0, 0);
+            Place(gPalette, DimLabel(Loc("Str_Bar_Fill"), 4), 1, 0);
 
             // Swatch rows, col 2. Row 0 gets a leading spacer the size of the "None" tile so the
             // color swatches sit directly above the fill swatches.
@@ -6064,7 +6751,7 @@ namespace KillerPDF
                 ApplyTextStyleToSelection();
                 ShowTextSettings();
             }, () => ShowTextSettings())));
-            Place(swatchRow1, 0, 2);
+            Place(gPalette, swatchRow1, 0, 1);
 
             var swatchRow2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
             bool noneActive = _textFillColor.A == 0;
@@ -6108,12 +6795,11 @@ namespace KillerPDF
                 Margin = new Thickness(2, 5, 8, 0), Padding = new Thickness(0, 5, 0, 0),
                 Child = swatchRow2
             };
-            Place(fillWrap, 1, 2);
+            Place(gPalette, fillWrap, 1, 1);
 
-            // Size group (row 0 only): sep | label + slider + value | sep. Cols 3-5.
-            Place(Sep(), 0, 3);
-            var sizeStack = new StackPanel { Orientation = Orientation.Horizontal };
-            sizeStack.Children.Add(DimLabel("Size:", 0));
+            // Size group: bottom row of the left block, directly below the font / style row.
+            var sizeStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 0, 0) };
+            sizeStack.Children.Add(DimLabel(Loc("Str_Bar_Size"), 0));
             var sizeSlider = new Slider
             {
                 Minimum = 8, Maximum = 72, Value = Math.Max(8, Math.Min(72, _textFontSize)),
@@ -6165,6 +6851,35 @@ namespace KillerPDF
                 }
                 sizeBox.Text = $"{_textFontSize:F0}";   // normalise / revert invalid input
             }
+            // Set an exact size and keep the slider + box in step (slider thumb clamps to 8-72).
+            void SetSize(double v)
+            {
+                _textFontSize = Math.Max(1, Math.Min(400, Math.Round(v)));
+                _suppressSizeSync = true;
+                sizeSlider.Value = Math.Max(8, Math.Min(72, _textFontSize));
+                _suppressSizeSync = false;
+                sizeBox.Text = $"{_textFontSize:F0}";
+                ApplyTextStyleToSelection();
+            }
+            // Tiny stepper button (− / +) for one-point nudges next to the slider.
+            Border StepButton(string glyph, Action onClick)
+            {
+                var st = new TextBlock
+                {
+                    Text = glyph, FontFamily = new FontFamily("Segoe UI"), FontSize = 13,
+                    VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center
+                };
+                st.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");
+                var sb = new Border
+                {
+                    Width = 18, Height = 20, CornerRadius = new CornerRadius(3),
+                    Margin = new Thickness(3, 0, 0, 0), Cursor = Cursors.Hand,
+                    BorderThickness = new Thickness(1), Background = Brushes.Transparent, Child = st
+                };
+                sb.BorderBrush = _swatchDimBorder;
+                sb.MouseLeftButtonDown += (_, _) => onClick();
+                return sb;
+            }
             sizeBox.PreviewKeyDown += (s, e) =>
             {
                 if (e.Key == Key.Enter)  { CommitSizeBox(); e.Handled = true; }
@@ -6173,24 +6888,72 @@ namespace KillerPDF
             sizeBox.LostFocus += (s, e) => CommitSizeBox();
             sizeBox.GotFocus  += (s, e) => sizeBox.SelectAll();
             sizeStack.Children.Add(sizeSlider);
+            sizeStack.Children.Add(StepButton("−", () => SetSize(_textFontSize - 1)));   // minus
+            sizeStack.Children.Add(StepButton("+", () => SetSize(_textFontSize + 1)));
             sizeStack.Children.Add(sizeBox);
             sizeStack.Children.Add(ptLabel);
-            Place(sizeStack, 0, 4);
-            Place(Sep(), 0, 5);
+            Place(gLeft, sizeStack, 1, 0);
 
-            // Grabbable strip filling the empty middle of the fill row (under the Size group).
-            var gapDrag = new Border { Background = Brushes.Transparent, Cursor = Cursors.Hand, Margin = new Thickness(0, 4, 0, 0) };
-            Place(gapDrag, 1, 3, 3);
+            // Fill-row middle (under the Size group): typeface selector + Bold / Italic / Strikethrough.
+            // A small square toggle whose glyph previews its own effect (bold B, italic I, struck-through S).
+            Border StyleToggle(string glyph, bool active, FontWeight fw, FontStyle fs, TextDecorationCollection? deco, Action onClick)
+            {
+                var gt = new TextBlock
+                {
+                    Text = glyph, FontFamily = new FontFamily("Segoe UI"), FontSize = 12,
+                    FontWeight = fw, FontStyle = fs, TextDecorations = deco,
+                    VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center
+                };
+                gt.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");
+                var b = new Border
+                {
+                    Width = 22, Height = 20, CornerRadius = new CornerRadius(3),
+                    Margin = new Thickness(2, 0, 0, 0), Cursor = Cursors.Hand,
+                    BorderThickness = new Thickness(active ? 2 : 1),
+                    Background = active ? AccentBrush(40) : Brushes.Transparent,
+                    Child = gt
+                };
+                if (active) b.SetResourceReference(Border.BorderBrushProperty, "Accent"); else b.BorderBrush = _swatchDimBorder;
+                b.MouseLeftButtonDown += (_, _) => onClick();
+                return b;
+            }
 
-            // Opacity (row 0) and Fill Opacity (row 1), aligned: label col 6, slider col 7, value col 8.
-            Place(DimLabel("Opacity:", 0, rightAlign: true), 0, 6);
+            var fontStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            fontStack.Children.Add(DimLabel(Loc("Str_Bar_Font"), 0));
+            var fontBox = new ComboBox
+            {
+                Width = 132, Height = 22, VerticalAlignment = VerticalAlignment.Center,
+                FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                MaxDropDownHeight = 320, Margin = new Thickness(0, 0, 4, 0)
+            };
+            if (FindResource("DarkComboBox") is Style cbStyle) fontBox.Style = cbStyle;
+            if (FindResource("DarkComboItem") is Style ciStyle) fontBox.ItemContainerStyle = ciStyle;
+            foreach (var fn in SystemFontNames) fontBox.Items.Add(fn);
+            fontBox.SelectedItem = _textFontName;
+            fontBox.SelectionChanged += (s, e) =>
+            {
+                if (fontBox.SelectedItem is string fn) { _textFontName = fn; ApplyTextStyleToSelection(); }
+            };
+            fontStack.Children.Add(fontBox);
+            fontStack.Children.Add(StyleToggle("B", _textBold, FontWeights.Bold, FontStyles.Normal, null,
+                () => { _textBold = !_textBold; ApplyTextStyleToSelection(); ShowTextSettings(); }));
+            fontStack.Children.Add(StyleToggle("I", _textItalic, FontWeights.Normal, FontStyles.Italic, null,
+                () => { _textItalic = !_textItalic; ApplyTextStyleToSelection(); ShowTextSettings(); }));
+            fontStack.Children.Add(StyleToggle("S", _textStrike, FontWeights.Normal, FontStyles.Normal, TextDecorations.Strikethrough,
+                () => { _textStrike = !_textStrike; ApplyTextStyleToSelection(); ShowTextSettings(); }));
+            fontStack.Children.Add(StyleToggle("U", _textUnderline, FontWeights.Normal, FontStyles.Normal, TextDecorations.Underline,
+                () => { _textUnderline = !_textUnderline; ApplyTextStyleToSelection(); ShowTextSettings(); }));
+            Place(gLeft, fontStack, 0, 0);
+
+            // Opacity (row 0) and Fill Opacity (row 1) block: label col 0, slider col 1, value col 2.
+            Place(gOpacity, DimLabel(Loc("Str_Bar_Opacity"), 0, rightAlign: true), 0, 0);
             var opacitySlider = new Slider
             {
                 Minimum = 10, Maximum = 255, Value = _textOpacity,
                 Width = 90, VerticalAlignment = VerticalAlignment.Center,
                 Style = (Style)FindResource("DarkSlider")
             };
-            Place(opacitySlider, 0, 7);
+            Place(gOpacity, opacitySlider, 0, 1);
             var opacityLabel = new TextBlock
             {
                 Text = $"{(int)(_textOpacity / 255.0 * 100)}%",
@@ -6199,7 +6962,7 @@ namespace KillerPDF
                 Width = 40, TextAlignment = TextAlignment.Right
             };
             opacityLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-            Place(opacityLabel, 0, 8);
+            Place(gOpacity, opacityLabel, 0, 2);
             opacitySlider.ValueChanged += (s, e) =>
             {
                 byte a = (byte)e.NewValue;
@@ -6209,7 +6972,7 @@ namespace KillerPDF
                 ApplyTextStyleToSelection();
             };
 
-            Place(DimLabel("Fill Opacity:", 10, rightAlign: true), 1, 6);
+            Place(gOpacity, DimLabel(Loc("Str_Bar_FillOpacity"), 10, rightAlign: true), 1, 0);
             byte curFillA = _textFillColor.A == 0 ? (byte)255 : _textFillColor.A;
             var fillOpSlider = new Slider
             {
@@ -6217,7 +6980,7 @@ namespace KillerPDF
                 Width = 90, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 10, 0, 0),
                 Style = (Style)FindResource("DarkSlider")
             };
-            Place(fillOpSlider, 1, 7);
+            Place(gOpacity, fillOpSlider, 1, 1);
             var fillOpLabel = new TextBlock
             {
                 Text = $"{(int)(curFillA / 255.0 * 100)}%",
@@ -6226,7 +6989,7 @@ namespace KillerPDF
                 Width = 40, TextAlignment = TextAlignment.Right
             };
             fillOpLabel.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-            Place(fillOpLabel, 1, 8);
+            Place(gOpacity, fillOpLabel, 1, 2);
             fillOpSlider.ValueChanged += (s, e) =>
             {
                 byte a = (byte)e.NewValue;
@@ -6243,7 +7006,23 @@ namespace KillerPDF
                 Background = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255)),
                 Margin = new Thickness(0, 5, 8, 0)
             };
-            Place(opDivider, 1, 7, 2);
+            Place(gOpacity, opDivider, 1, 1, 2);
+
+            // Assemble the blocks into a wrapping host: grip + the three 2-row blocks, with thin separators
+            // between them. When wide it's the same two rows as before; when narrow whole blocks drop down.
+            var wrapHost = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 2, 8, 2), Background = Brushes.Transparent };
+            // Left-to-right collapse: gLeft (Font/Size) stays on row 1 with the grip; Color and Opacity live
+            // in a nested wrap panel that, as the bar narrows, FIRST drops below gLeft as a whole (the break
+            // lands "before the colors"), THEN splits so Opacity drops below Color. Inter-block spacing is
+            // each block's right margin (set above), so it survives wrapping with no separators.
+            var tRest = new WrapPanel { Orientation = Orientation.Horizontal, Background = Brushes.Transparent };
+            tRest.Children.Add(gPalette);
+            tRest.Children.Add(gOpacity);
+            wrapHost.Children.Add(textGrip);
+            wrapHost.Children.Add(gLeft);
+            wrapHost.Children.Add(tRest);
+            _annotBarDragInners.Clear();
+            _annotBarDragInners.Add(tRest);
 
             _textSettingsBar = new Border
             {
@@ -6253,7 +7032,7 @@ namespace KillerPDF
                 CornerRadius = new CornerRadius(0, 0, 4, 4),
                 Padding = new Thickness(4),
                 Effect = AnnotBarShadow(),
-                Child = BuildBarHost(grid),
+                Child = BuildBarHost(wrapHost),
                 Margin = new Thickness(0, 0, 0, 0)
             };
             _textSettingsBar.SetResourceReference(Border.BackgroundProperty,  "BgFlyout");
@@ -6264,8 +7043,15 @@ namespace KillerPDF
             {
                 Panel.SetZIndex(_textSettingsBar, 100);
                 previewArea.Children.Add(_textSettingsBar);
+                // Cap the wrap host to the document area's width so the blocks reflow on a narrow window.
+                wrapHost.SetBinding(FrameworkElement.MaxWidthProperty, new System.Windows.Data.Binding("ActualWidth")
+                { Source = previewArea, Converter = _barWidthInset });
+                // The nested Color+Opacity panel gets the same cap so that, once it has dropped to its own
+                // row, it splits Color / Opacity when even that row is too narrow.
+                tRest.SetBinding(FrameworkElement.MaxWidthProperty, new System.Windows.Data.Binding("ActualWidth")
+                { Source = previewArea, Converter = _barWidthInset });
+                WireBarWrapAdaptation(wrapHost, textGrip, gLeft, previewArea);
                 PlaceAnnotationBar(_textSettingsBar, textGrip, fadeIn: appearing);
-                EnableBarSlide(gapDrag, _textSettingsBar, previewArea);   // the empty middle strip also drags the bar
             }
             _annotBarTool = EditTool.Text;
             _annotBarMinimized = false;   // a freshly built bar is full-size
@@ -6394,6 +7180,13 @@ namespace KillerPDF
         private void LoadSignatures() => _signatureStore.Load();
 
         private void PersistSignatures() => _signatureStore.Persist();
+
+        // Rebuild the signature popup (if open) so its Loc()-built labels - section headers, pen sizes -
+        // switch immediately on a language change rather than only on the next open.
+        private void RefreshSignaturePopupLanguage()
+        {
+            if (_signaturePopup is not null) ShowSignaturePopup();
+        }
 
         private void ShowSignaturePopup()
         {
@@ -6617,7 +7410,7 @@ namespace KillerPDF
                 stack.Children.Add(rowBtns);
             }
 
-            AddSigSection("Signatures", SignatureKind.Signature);
+            AddSigSection(Loc("Str_Sig_Signatures"), SignatureKind.Signature);
 
             stack.Children.Add(new Rectangle
             {
@@ -6626,7 +7419,7 @@ namespace KillerPDF
                 Margin = new Thickness(4, 6, 4, 2)
             });
 
-            AddSigSection("Initials", SignatureKind.Initials);
+            AddSigSection(Loc("Str_Sig_Initials"), SignatureKind.Initials);
 
             // Match the Settings/menu popups: themed modal surface + accent border + film grain.
             var sigContent = new Grid();
@@ -6816,6 +7609,10 @@ namespace KillerPDF
             };
             TextOptions.SetTextFormattingMode(win, TextFormattingMode.Display);
             TextOptions.SetTextRenderingMode(win, TextRenderingMode.Grayscale);
+            // This separate window can't see MainWindow's ChromeCloseCorner, so the close button's
+            // {DynamicResource ChromeCloseCorner} fell back to 0 (square hover). Provide it here so the
+            // hover rounds the top-right corner to match the window.
+            win.Resources["ChromeCloseCorner"] = new CornerRadius(0, 7, 0, 0);
 
             // Outer chrome
             var outerChrome = new Border
@@ -6968,8 +7765,8 @@ namespace KillerPDF
             // Pen-width selector: three preset thicknesses, active one highlighted. On the left so the
             // modal does not read bottom-right-heavy.
             var penRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 6, 12, 0), VerticalAlignment = VerticalAlignment.Center };
-            penRow.Children.Add(new TextBlock { Text = "Pen", Foreground = (SolidColorBrush)FindResource("TextSecondary"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
-            var penOptions = new (string Label, double W)[] { ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.0) };
+            penRow.Children.Add(new TextBlock { Text = Loc("Str_Sig_Pen"), Foreground = (SolidColorBrush)FindResource("TextSecondary"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
+            var penOptions = new (string Label, double W)[] { (Loc("Str_Sig_Thin"), 2.0), (Loc("Str_Sig_Medium"), 4.5), (Loc("Str_Sig_Thick"), 9.0) };
             var penBtns = new List<Button>();
             void RefreshPen()
             {
@@ -7000,14 +7797,12 @@ namespace KillerPDF
                 penRow.Children.Add(pb);
             }
             RefreshPen();
-            contentArea.Children.Add(penRow);
 
             // Buttons
             var btnPanel = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(12, 4, 12, 12)
+                HorizontalAlignment = HorizontalAlignment.Right
             };
 
             var clearBtn = UiButtons.Make(Loc("Str_Sig_Clear"), accent: false);
@@ -7058,6 +7853,11 @@ namespace KillerPDF
 
             btnPanel.Children.Add(clearBtn);
             btnPanel.Children.Add(saveBtn);
+
+            // Pen-size selector on its own row above the buttons. A single shared row doesn't survive
+            // longer translated labels (e.g. Bengali Clear/Save) - the last pen option ("Thick") clipped.
+            contentArea.Children.Add(penRow);
+            btnPanel.Margin = new Thickness(12, 4, 12, 12);
             contentArea.Children.Add(btnPanel);
 
             rootStack.Children.Add(contentArea);
@@ -7629,9 +8429,21 @@ namespace KillerPDF
                                         hitPlaced = true;
                                         break;
                                     }
-                                    ClearSelection();
-                                    RenderAllAnnotations(pageIdx);
-                                    SelectAnnotation(pa, paBounds);
+                                    // A grouped annotation selects + drags its whole group together;
+                                    // otherwise just this one. _dragGroupOrig holds the companions' start
+                                    // positions so the group translates rigidly during the drag.
+                                    _dragGroupOrig.Clear();
+                                    if (pa.GroupId.Length > 0)
+                                    {
+                                        SelectGroup(pa);
+                                        foreach (var m in _selectedSet) _dragGroupOrig.Add((m, AnnotGetPos(m)));
+                                    }
+                                    else
+                                    {
+                                        ClearSelection();
+                                        RenderAllAnnotations(pageIdx);
+                                        SelectAnnotation(pa, paBounds);
+                                    }
                                     _isDraggingAnnot = true;
                                     _dragAnnotStart = pos;
                                     _dragAnnotOrigPos = AnnotGetPos(pa);
@@ -7692,11 +8504,16 @@ namespace KillerPDF
                     var previewFill = _currentTool == EditTool.Highlight
                         ? _highlightColor
                         : Color.FromArgb(70, _lineAnnotColor.R, _lineAnnotColor.G, _lineAnnotColor.B);
-                    var rect = new Rectangle
+                    var rect = new Rectangle { Width = 0, Height = 0 };
+                    if (_currentTool == EditTool.Highlight && _highlightErase)
                     {
-                        Fill = new SolidColorBrush(previewFill),
-                        Width = 0, Height = 0
-                    };
+                        // Eraser: a dashed hollow box so it reads as "delete inside" rather than a highlight.
+                        rect.Fill = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
+                        rect.Stroke = Brushes.White;
+                        rect.StrokeThickness = 1.5;
+                        rect.StrokeDashArray = new DoubleCollection { 4, 3 };
+                    }
+                    else rect.Fill = new SolidColorBrush(previewFill);
                     Canvas.SetLeft(rect, pos.X);
                     Canvas.SetTop(rect, pos.Y);
                     _activeCanvas.Children.Add(rect);
@@ -7712,7 +8529,9 @@ namespace KillerPDF
                     _activeInk.Points.Add(pos);
                     var poly = new Polyline
                     {
-                        Stroke = new SolidColorBrush(_drawColor),
+                        // Eraser brush shows a translucent grey stroke so it reads as erasing, not inking.
+                        Stroke = _drawErase ? new SolidColorBrush(Color.FromArgb(120, 200, 200, 200))
+                                            : new SolidColorBrush(_drawColor),
                         StrokeThickness = _drawWidth,
                         StrokeLineJoin = PenLineJoin.Round,
                         StrokeStartLineCap = PenLineCap.Round,
@@ -7721,6 +8540,30 @@ namespace KillerPDF
                     poly.Points.Add(pos);
                     _activeCanvas.Children.Add(poly);
                     _activePreview = poly;
+                    _activeCanvas.CaptureMouse();
+                    break;
+
+                case EditTool.Line:
+                    // A straight line is a 2-point ink stroke - reuses ink rendering/export/selection and
+                    // gets round end caps (and antialiased edges) for free. The 2nd point tracks the drag.
+                    ClearSelection();
+                    _isDrawing = true;
+                    _drawStart = pos;
+                    _activeInk = new InkAnnotation { PageIndex = pageIdx, StrokeWidth = _drawWidth };
+                    _activeInk.SetColor(_drawColor);
+                    _activeInk.Points.Add(pos);
+                    _activeInk.Points.Add(pos);
+                    var lpoly = new Polyline
+                    {
+                        Stroke = new SolidColorBrush(_drawColor),
+                        StrokeThickness = _drawWidth,
+                        StrokeStartLineCap = PenLineCap.Round,
+                        StrokeEndLineCap = PenLineCap.Round
+                    };
+                    lpoly.Points.Add(pos);
+                    lpoly.Points.Add(pos);
+                    _activeCanvas.Children.Add(lpoly);
+                    _activePreview = lpoly;
                     _activeCanvas.CaptureMouse();
                     break;
 
@@ -7774,6 +8617,15 @@ namespace KillerPDF
             if (e.OriginalSource is DependencyObject moveSrc && IsFormFieldElement(moveSrc))
                 return;
 
+            // Safety: a drag/resize is in progress but the left button is no longer down - the mouse-up was
+            // lost (typically because the app was in the background when the user released). Finish the
+            // gesture now so the annotation stops following the cursor and the canvas frees its capture.
+            if (e.LeftButton != MouseButtonState.Pressed && (_isDraggingAnnot || _isResizingSig))
+            {
+                FinishStuckGesture();
+                return;
+            }
+
             // Resolve the pointer against the surface the gesture started on, not _activeCanvas,
             // which RenderAllAnnotations (and async grid tile streaming) can re-point mid-gesture.
             var gc = _gestureCanvas ?? _activeCanvas;
@@ -7820,8 +8672,7 @@ namespace KillerPDF
                 }
                 LayoutResizeHandles(nx, ny, newW, newH);
                 RenderAllAnnotations(rta.PageIndex);
-                _activeCanvas.Children.Add(_selectionBorder!);
-                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                ReattachSelectionVisuals();   // re-add border + handles + the paired cover outline (stays put during resize/move)
                 return;
             }
 
@@ -7856,8 +8707,7 @@ namespace KillerPDF
                 // Re-render annotations to show updated size
                 RenderAllAnnotations(_resizeSigAnnot.PageIndex);
                 // Restore selection visuals (RenderAllAnnotations clears canvas children including our overlays)
-                _activeCanvas.Children.Add(_selectionBorder!);
-                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                ReattachSelectionVisuals();   // re-add border + handles + the paired cover outline (stays put during resize/move)
                 return;
             }
 
@@ -7879,8 +8729,7 @@ namespace KillerPDF
                 }
                 LayoutResizeHandles(nx, ny, newW, newH);
                 RenderAllAnnotations(_resizeHlAnnot.PageIndex);
-                _activeCanvas.Children.Add(_selectionBorder!);
-                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                ReattachSelectionVisuals();   // re-add border + handles + the paired cover outline (stays put during resize/move)
                 return;
             }
 
@@ -7909,8 +8758,7 @@ namespace KillerPDF
                 }
                 LayoutResizeHandles(ib.X, ib.Y, ib.Width, ib.Height);
                 RenderAllAnnotations(_resizeInkAnnot.PageIndex);
-                _activeCanvas.Children.Add(_selectionBorder!);
-                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                ReattachSelectionVisuals();   // re-add border + handles + the paired cover outline (stays put during resize/move)
                 return;
             }
 
@@ -7919,8 +8767,38 @@ namespace KillerPDF
             {
                 double dx = pos.X - _dragAnnotStart.X;
                 double dy = pos.Y - _dragAnnotStart.Y;
-                AnnotSetPos(_dragAnnot, new Point(_dragAnnotOrigPos.X + dx, _dragAnnotOrigPos.Y + dy));
-                AnnotSetPos(_dragAnnot, ClampAnnotPos(_dragAnnot));   // keep the whole annotation on-page
+                if (_dragGroupOrig.Count > 0)
+                {
+                    // Rigid group move: clamp ONE shared delta against the group's combined bounds so the
+                    // whole group stops at the page edge together - clamping members individually would let
+                    // some stop while others slide on, distorting the layout. Applies the same delta to all.
+                    double minLeft = _dragAnnotOrigPos.X, minTop = _dragAnnotOrigPos.Y;
+                    double maxRight = _dragAnnotOrigPos.X + AnnotBounds(_dragAnnot).Width;
+                    double maxBottom = _dragAnnotOrigPos.Y + AnnotBounds(_dragAnnot).Height;
+                    foreach (var (m, orig) in _dragGroupOrig)
+                    {
+                        var sz = AnnotBounds(m).Size;
+                        minLeft = Math.Min(minLeft, orig.X);
+                        minTop = Math.Min(minTop, orig.Y);
+                        maxRight = Math.Max(maxRight, orig.X + sz.Width);
+                        maxBottom = Math.Max(maxBottom, orig.Y + sz.Height);
+                    }
+                    if (_renderDims.TryGetValue(_dragAnnot.PageIndex, out var rdg))
+                    {
+                        // Math.Max(lo, ...) wins when the group is larger than the page, pinning it to the
+                        // top-left edge instead of letting it drift partly off.
+                        dx = Math.Max(-minLeft, Math.Min(rdg.w - maxRight, dx));
+                        dy = Math.Max(-minTop, Math.Min(rdg.h - maxBottom, dy));
+                    }
+                    AnnotSetPos(_dragAnnot, new Point(_dragAnnotOrigPos.X + dx, _dragAnnotOrigPos.Y + dy));
+                    foreach (var (m, orig) in _dragGroupOrig)
+                        AnnotSetPos(m, new Point(orig.X + dx, orig.Y + dy));
+                }
+                else
+                {
+                    AnnotSetPos(_dragAnnot, new Point(_dragAnnotOrigPos.X + dx, _dragAnnotOrigPos.Y + dy));
+                    AnnotSetPos(_dragAnnot, ClampAnnotPos(_dragAnnot));   // keep the whole annotation on-page
+                }
                 var db = AnnotBounds(_dragAnnot);
                 if (_selectionBorder is not null)
                 {
@@ -7930,8 +8808,8 @@ namespace KillerPDF
                 if (_dragAnnot is PlacedAnnotation or TextAnnotation or HighlightAnnotation or InkAnnotation)
                     LayoutResizeHandles(db.X, db.Y, db.Width, db.Height);
                 RenderAllAnnotations(_dragAnnot.PageIndex);
-                _activeCanvas.Children.Add(_selectionBorder!);
-                foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
+                ReattachSelectionVisuals();   // re-add border + handles + the paired cover outline (stays put during resize/move)
+                if (_dragGroupOrig.Count > 0) ReattachMultiOutlines();   // keep group outlines live during the drag
                 return;
             }
 
@@ -8000,6 +8878,23 @@ namespace KillerPDF
                     poly.Points.Add(pos);
                     break;
 
+                case EditTool.Line when _activePreview is Polyline lp && _activeInk is not null && _activeInk.Points.Count >= 2:
+                    // Straight line: the second point follows the cursor (endpoint), no points added.
+                    // "Level" snaps to the nearest axis - horizontal when the drag is wider than tall,
+                    // vertical otherwise - so both level horizontal and vertical lines just work.
+                    Point lend;
+                    if (_lineLevel)
+                    {
+                        var sp = _activeInk.Points[0];
+                        lend = Math.Abs(pos.X - sp.X) >= Math.Abs(pos.Y - sp.Y)
+                            ? new Point(pos.X, sp.Y)    // horizontal
+                            : new Point(sp.X, pos.Y);   // vertical
+                    }
+                    else lend = pos;
+                    _activeInk.Points[1] = lend;
+                    lp.Points[1] = lend;
+                    break;
+
                 case EditTool.Crop when _activePreview is Rectangle crect:
                     Canvas.SetLeft(crect, Math.Min(pos.X, _drawStart.X));
                     Canvas.SetTop(crect, Math.Min(pos.Y, _drawStart.Y));
@@ -8012,6 +8907,20 @@ namespace KillerPDF
         // Draggable annotations (placed image/signature and typewriter text) expose a top-left
         // Position; these helpers read/write it generically so one drag path serves both.
         private static bool IsDraggable(PageAnnotation a) => a is PlacedAnnotation or TextAnnotation or HighlightAnnotation or InkAnnotation;
+
+        // Shortest distance from point p to the segment a-b. Used to hit-test straight lines and ink
+        // strokes along their length, not just at their sample points.
+        private static double DistPointToSegment(Point p, Point a, Point b)
+        {
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            double len2 = dx * dx + dy * dy;
+            if (len2 < 1e-9) { dx = p.X - a.X; dy = p.Y - a.Y; return Math.Sqrt(dx * dx + dy * dy); }
+            double t = ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / len2;
+            t = Math.Max(0, Math.Min(1, t));
+            double qx = a.X + t * dx, qy = a.Y + t * dy;
+            double ex = p.X - qx, ey = p.Y - qy;
+            return Math.Sqrt(ex * ex + ey * ey);
+        }
         private static Point AnnotGetPos(PageAnnotation a) => a switch
         {
             PlacedAnnotation p => p.Position,
@@ -8173,9 +9082,12 @@ namespace KillerPDF
                         return;
                     }
                     RenderAllAnnotations(da.PageIndex);
-                    SelectAnnotation(da, AnnotBounds(da));
+                    // Keep the whole group selected after a group move (not just the dragged member).
+                    if (da.GroupId.Length > 0) SelectGroup(da);
+                    else SelectAnnotation(da, AnnotBounds(da));
                     MarkDirty();
                 }
+                _dragGroupOrig.Clear();
                 return;
             }
 
@@ -8243,6 +9155,13 @@ namespace KillerPDF
             {
                 _isSelecting = false;
                 _activeCanvas?.ReleaseMouseCapture();
+                // Drop the shaded marquee rectangle now that the drag is over - the selection it made is
+                // kept, but the box itself shouldn't linger on the page.
+                if (_selectRect is not null)
+                {
+                    (_selectRect.Parent as Canvas)?.Children.Remove(_selectRect);
+                    _selectRect = null;
+                }
                 var pos = e.GetPosition(_activeCanvas);
                 double dragW = Math.Abs(pos.X - _selectStart.X);
                 double dragH = Math.Abs(pos.Y - _selectStart.Y);
@@ -8311,7 +9230,20 @@ namespace KillerPDF
                 case EditTool.Underline when _activePreview is Rectangle:
                     {
                         var rect = (Rectangle)_activePreview;
-                        if (rect.Width > 3 && rect.Height > 3)
+                        // Eraser mode (Highlight tool): the box deletes annotations inside it instead of
+                        // laying down a highlight.
+                        if (_currentTool == EditTool.Highlight && _highlightErase)
+                        {
+                            if (rect.Width > 3 && rect.Height > 3)
+                            {
+                                var region = new Rect(Canvas.GetLeft(rect), Canvas.GetTop(rect), rect.Width, rect.Height);
+                                _activeCanvas?.Children.Remove(rect);
+                                // Partial erase: cut strokes inside the box and subtract it from highlights.
+                                ErasePartial(pageIdx, p => region.Contains(p), region, 4.0);
+                            }
+                            else _activeCanvas?.Children.Remove(rect);
+                        }
+                        else if (rect.Width > 3 && rect.Height > 3)
                         {
                             var ha = new HighlightAnnotation
                             {
@@ -8334,9 +9266,48 @@ namespace KillerPDF
                     break;
 
                 case EditTool.Draw when _activeInk is not null:
-                    if (_activeInk.Points.Count > 2)
+                    if (_drawErase)
+                    {
+                        // Brush eraser: partial-erase only what the brush passes over (within its radius).
+                        double radius = _drawWidth / 2.0;
+                        var pts = _activeInk.Points;
+                        _activeCanvas?.Children.Remove(_activePreview);
+                        bool Covered(Point p)
+                        {
+                            if (pts.Count == 1)
+                                return (p - pts[0]).Length <= radius;
+                            for (int i = 0; i < pts.Count - 1; i++)
+                                if (DistPointToSegment(p, pts[i], pts[i + 1]) <= radius) return true;
+                            return false;
+                        }
+                        ErasePartial(pageIdx, Covered, null, Math.Max(1.0, radius / 2.0));
+                    }
+                    else if (_activeInk.Points.Count > 2)
+                    {
+                        // Commit, drop the preview, and render the stroke from _annotations - the same three
+                        // steps the Highlight and Line cases do. Relying on the preview to "stay" only ever
+                        // worked in single-page mode; continuous re-renders the overlay from _annotations,
+                        // so a committed stroke that was never rendered there just disappears.
+                        AddAnnotation(_activeInk);
+                        _activeCanvas?.Children.Remove(_activePreview);
+                        RenderAllAnnotations(pageIdx);
+                    }
+                    else
+                    {
+                        _activeCanvas?.Children.Remove(_activePreview);
+                    }
+                    _activeInk = null;
+                    break;
+
+                case EditTool.Line when _activeInk is not null:
+                    // Commit only a line with real length; a click without a drag is discarded.
+                    if (_activeInk.Points.Count >= 2 &&
+                        (Math.Abs(_activeInk.Points[1].X - _activeInk.Points[0].X) > 3 ||
+                         Math.Abs(_activeInk.Points[1].Y - _activeInk.Points[0].Y) > 3))
                     {
                         AddAnnotation(_activeInk);
+                        _activeCanvas?.Children.Remove(_activePreview);
+                        RenderAllAnnotations(pageIdx);
                     }
                     else
                     {
@@ -8398,6 +9369,10 @@ namespace KillerPDF
                 case InkAnnotation ia when ia.Points.Count > 0:
                     bool near = ia.Points.Any(p =>
                         Math.Sqrt((p.X - pos.X) * (p.X - pos.X) + (p.Y - pos.Y) * (p.Y - pos.Y)) < 15);
+                    // Also hit anywhere along each segment, so a straight line is grabbable along its whole
+                    // length (not just its two endpoints) and freehand strokes select between sample points.
+                    for (int si = 0; si < ia.Points.Count - 1 && !near; si++)
+                        if (DistPointToSegment(pos, ia.Points[si], ia.Points[si + 1]) < 10) near = true;
                     if (near)
                     {
                         double minX = ia.Points.Min(p => p.X);
@@ -8659,6 +9634,39 @@ namespace KillerPDF
             return false;
         }
 
+        // Abort an in-progress drag or resize and release the canvas's mouse capture. Used when the gesture
+        // can't be finished normally - the mouse-up was lost because the app was backgrounded mid-drag, or
+        // the window deactivated. Leaves the annotation selected at its last position so it stays usable.
+        private void FinishStuckGesture()
+        {
+            PageAnnotation? keep = _dragAnnot;
+            keep ??= _resizeTextAnnot;
+            keep ??= _resizeHlAnnot;
+            keep ??= _resizeInkAnnot;
+            keep ??= _resizeSigAnnot;
+
+            _isDraggingAnnot = false;
+            _isResizingSig = false;
+            _dragAnnot = null;
+            _resizeTextAnnot = null;
+            _resizeHlAnnot = null;
+            _resizeInkAnnot = null;
+            _resizeSigAnnot = null;
+            _resizeInkOrigPoints = null;
+            _dragGroupOrig.Clear();
+
+            // Release whatever element grabbed the mouse for this gesture (and the active canvas, in case).
+            if (Mouse.Captured is FrameworkElement cap) cap.ReleaseMouseCapture();
+            _activeCanvas?.ReleaseMouseCapture();
+
+            if (keep is not null)
+            {
+                RenderAllAnnotations(keep.PageIndex);
+                SelectAnnotation(keep, AnnotBounds(keep));
+                MarkDirty();
+            }
+        }
+
         private void ClearSelection()
         {
             if (_selectionBorder is not null)
@@ -8683,6 +9691,7 @@ namespace KillerPDF
             _resizeInkOrigPoints = null;
             _isDraggingAnnot = false;
             _dragAnnot = null;
+            _dragGroupOrig.Clear();
             _selectedAnnotation = null;
             // If the text bar was opened for a now-cleared text-box selection (not because the Text tool
             // is active), close it again.
@@ -8790,6 +9799,7 @@ namespace KillerPDF
             foreach (var a in _selectedSet)
                 if (!toDelete.Contains(a)) toDelete.Add(a);
             if (toDelete.Count == 0) return;
+            PushPagesSnapshotUndo(toDelete.Select(a => a.PageIndex));
 
             var pages = new HashSet<int>();
             foreach (var a in toDelete)
@@ -8808,6 +9818,99 @@ namespace KillerPDF
             SetStatus(toDelete.Count == 1
                 ? "Deleted selected annotation"
                 : $"Deleted {toDelete.Count} annotations");
+        }
+
+        // Resample a polyline so consecutive points are at most maxSpacing apart. Lets the eraser cut a
+        // sparse stroke (or a 2-point line) mid-segment, not just at its original sample points.
+        private static List<Point> DensifyPolyline(List<Point> pts, double maxSpacing)
+        {
+            var dense = new List<Point>();
+            if (pts.Count == 0) return dense;
+            dense.Add(pts[0]);
+            for (int i = 1; i < pts.Count; i++)
+            {
+                Point a = pts[i - 1], b = pts[i];
+                double d = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                int steps = Math.Max(1, (int)Math.Ceiling(d / Math.Max(0.5, maxSpacing)));
+                for (int s = 1; s <= steps; s++)
+                    dense.Add(new Point(a.X + (b.X - a.X) * s / steps, a.Y + (b.Y - a.Y) * s / steps));
+            }
+            return dense;
+        }
+
+        // The parts of rect a NOT covered by rect b (rectangle subtraction), as up to four strips. Returns
+        // [a] when they don't overlap, and an empty list when b fully covers a.
+        private static List<Rect> SubtractRect(Rect a, Rect b)
+        {
+            var res = new List<Rect>();
+            var inter = Rect.Intersect(a, b);
+            if (inter.IsEmpty) { res.Add(a); return res; }
+            if (inter.Top > a.Top)       res.Add(new Rect(a.Left, a.Top, a.Width, inter.Top - a.Top));
+            if (inter.Bottom < a.Bottom) res.Add(new Rect(a.Left, inter.Bottom, a.Width, a.Bottom - inter.Bottom));
+            if (inter.Left > a.Left)     res.Add(new Rect(a.Left, inter.Top, inter.Left - a.Left, inter.Height));
+            if (inter.Right < a.Right)   res.Add(new Rect(inter.Right, inter.Top, a.Right - inter.Right, inter.Height));
+            return res;
+        }
+
+        // True partial eraser: remove only the parts of annotations under the eraser, not whole annotations.
+        // Ink/line strokes are split at the covered points; highlight rectangles are subtracted (rect eraser
+        // only - rectRegion). Text, images, signatures and covers can't be vector-erased, so they're left
+        // as-is. One undoable action. 'covered' tests a single canvas point; densifySpacing controls how
+        // finely strokes are resampled before testing.
+        private void ErasePartial(int pageIdx, Func<Point, bool> covered, Rect? rectRegion, double densifySpacing)
+        {
+            if (!_annotations.TryGetValue(pageIdx, out var list)) return;
+            var result = new List<PageAnnotation>();
+            bool changed = false;
+            foreach (var a in list)
+            {
+                switch (a)
+                {
+                    case CoverAnnotation:
+                        result.Add(a);   // paired opaque cover - leave intact
+                        break;
+
+                    case InkAnnotation ink when ink.Points.Count >= 1:
+                    {
+                        var dense = DensifyPolyline(ink.Points, densifySpacing);
+                        if (!dense.Any(covered)) { result.Add(ink); break; }
+                        changed = true;
+                        var runs = new List<List<Point>>();
+                        List<Point>? cur = null;
+                        foreach (var p in dense)
+                        {
+                            if (covered(p)) { if (cur is { Count: >= 2 }) runs.Add(cur); cur = null; }
+                            else (cur ??= new List<Point>()).Add(p);
+                        }
+                        if (cur is { Count: >= 2 }) runs.Add(cur);
+                        foreach (var run in runs)
+                            if (CloneAnnotation(ink) is InkAnnotation seg) { seg.Points = run; result.Add(seg); }
+                        break;
+                    }
+
+                    case HighlightAnnotation h when rectRegion is Rect er:
+                    {
+                        var pieces = SubtractRect(h.Bounds, er);
+                        if (pieces.Count == 1 && pieces[0] == h.Bounds) { result.Add(h); break; }
+                        changed = true;
+                        foreach (var pc in pieces)
+                            if (pc.Width >= 1 && pc.Height >= 1 && CloneAnnotation(h) is HighlightAnnotation nh)
+                            { nh.Bounds = pc; result.Add(nh); }
+                        break;
+                    }
+
+                    default:
+                        result.Add(a);   // text / image / signature (or a highlight under the brush): untouched
+                        break;
+                }
+            }
+            if (!changed) return;
+            PushPageSnapshotUndo(pageIdx);
+            _annotations[pageIdx] = result;
+            ClearSelection();
+            RenderAllAnnotations(pageIdx);
+            MarkDirty();
+            SetStatus("Erased");
         }
 
         // Ctrl+A: multi-select every annotation on the pages currently on screen (single selected page,
@@ -9334,6 +10437,38 @@ namespace KillerPDF
         // Inline text editing (double-click)
         // ============================================================
 
+        // While a paired text is being re-edited, trace its cover with a dashed outline so the cover stays
+        // visible (its opaque fill often matches the page, so without this it looks like the cover vanished).
+        private void ShowReeditCoverOutline(string pairId, int pageIdx)
+        {
+            RemoveReeditCoverOutline();
+            if (pairId.Length == 0 || !_annotations.TryGetValue(pageIdx, out var list)) return;
+            var cover = list.OfType<CoverAnnotation>().FirstOrDefault(c => c.PairId == pairId);
+            if (cover is null) return;
+            double inv = 1.0;
+            if (_activeCanvas.LayoutTransform is ScaleTransform st && st.ScaleX > 0.0001) inv = 1.0 / st.ScaleX;
+            var pb = cover.Bounds;
+            _reeditCoverOutline = new Rectangle
+            {
+                Width = pb.Width + 4, Height = pb.Height + 4,
+                Stroke = DarkerAccentBrush(), StrokeThickness = 1.5 * inv,
+                StrokeDashArray = new DoubleCollection { 4, 3 },
+                Fill = Brushes.Transparent, IsHitTestVisible = false
+            };
+            Canvas.SetLeft(_reeditCoverOutline, pb.X - 2);
+            Canvas.SetTop(_reeditCoverOutline, pb.Y - 2);
+            _activeCanvas.Children.Add(_reeditCoverOutline);
+        }
+
+        private void RemoveReeditCoverOutline()
+        {
+            if (_reeditCoverOutline is not null)
+            {
+                (_reeditCoverOutline.Parent as Canvas)?.Children.Remove(_reeditCoverOutline);
+                _reeditCoverOutline = null;
+            }
+        }
+
         private void EditTextAtPosition(Point canvasPos, int pageIdx)
         {
             if (_currentFile is null || !_renderDims.ContainsKey(pageIdx)) return;
@@ -9361,10 +10496,15 @@ namespace KillerPDF
                     if (_doc is not null && _renderDims.TryGetValue(pageIdx, out var prd) && prd.h > 0)
                         syp = _doc.Pages[pageIdx].Height.Point / prd.h;
                     _textFontSize = Math.Max(1, Math.Round(placed.FontSize * syp));
+                    // Sync the bar's typeface + B/I/S to the box being re-edited.
+                    _textFontName = string.IsNullOrEmpty(placed.FontName) ? "Segoe UI" : placed.FontName;
+                    _textBold = placed.Bold; _textItalic = placed.Italic; _textStrike = placed.Strike; _textUnderline = placed.Underline;
 
                     _reeditOriginal = placed;
                     placedPage.Remove(placed);
                     RenderAllAnnotations(pageIdx);
+                    // Keep the paired cover visible (outlined) for the duration of the edit.
+                    ShowReeditCoverOutline(placed.PairId, pageIdx);
 
                     var ptb = new TextBox
                     {
@@ -9388,6 +10528,7 @@ namespace KillerPDF
                     Canvas.SetTop(ptb, placed.Position.Y);
                     _activeCanvas.Children.Add(ptb);
                     _activeTextBox = ptb;
+                    StyleEditBox(ptb);   // restore the box's typeface + B/I/S
                     ptb.PreviewKeyDown += TextBox_PreviewKeyDown;
                     ptb.Loaded += (s, ev) => { ptb.Focus(); Keyboard.Focus(ptb); ptb.SelectAll(); ptb.LostFocus += TextBox_LostFocus; AttachTextEditResizeHandles(ptb); };
                     ShowTextSettings();
@@ -9569,6 +10710,10 @@ namespace KillerPDF
             cover.SetColor(coverBg);
             _textColor = inkColor; _textOpacity = inkColor.A;
             _textFontSize = Math.Max(1, Math.Round(boxFontCanvas / syInv));   // canvas units -> points
+            // Replacing raw PDF text starts from the detected font with no extra styling; the box below
+            // already uses fontName, and the bar/commit read this state.
+            _textFontName = string.IsNullOrEmpty(fontName) ? "Segoe UI" : fontName;
+            _textBold = _textItalic = _textStrike = _textUnderline = false;
             _pendingEditWasDirty = _isDirty;   // capture before the cover dirties the doc
             if (!_annotations.ContainsKey(pageIdx)) _annotations[pageIdx] = [];
             _annotations[pageIdx].Add(cover);
@@ -9681,6 +10826,7 @@ namespace KillerPDF
             Canvas.SetTop(tb, pos.Y);
             _activeCanvas.Children.Add(tb);
             _activeTextBox = tb;
+            StyleEditBox(tb);   // current typeface + B/I/S
             tb.PreviewKeyDown += TextBox_PreviewKeyDown;
             tb.LostFocus += TextBox_LostFocus;
             // Focus the box and attach its live resize handles once laid out. Loaded fires on first
@@ -9793,6 +10939,7 @@ namespace KillerPDF
             if (e.Key == Key.Escape)
             {
                 RemoveTextEditHandles();
+                RemoveReeditCoverOutline();   // edit cancelled; drop the cover hint (repaint follows)
                 if (_activeTextBox is not null)
                 {
                     RemoveFromParent(_activeTextBox);
@@ -9845,6 +10992,7 @@ namespace KillerPDF
             var tb = _activeTextBox;
             _activeTextBox = null;
             RemoveTextEditHandles();
+            RemoveReeditCoverOutline();   // the re-edit is ending; drop its cover hint (repaint follows)
             string reeditPair = _reeditOriginal?.PairId ?? "";   // preserve a re-edited text's cover pairing
             _reeditOriginal = null;   // committing replaces any annotation being re-edited
 
@@ -9870,6 +11018,11 @@ namespace KillerPDF
                     Position = new Point(x, y),
                     Content = content,
                     FontSize = tb.FontSize,
+                    FontName = _textFontName,
+                    Bold = _textBold,
+                    Italic = _textItalic,
+                    Strike = _textStrike,
+                    Underline = _textUnderline,
                     Width = boxW
                 };
                 ta.SetColor(tb.Foreground is SolidColorBrush scb ? scb.Color : Colors.Black);
@@ -10033,12 +11186,16 @@ namespace KillerPDF
 
             if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                CopySelectedText();
+                // An annotation selection copies the annotation(s); otherwise copy page text.
+                if (_selectedAnnotation is not null || _selectedSet.Count > 0) CopySelectedAnnotations();
+                else CopySelectedText();
                 e.Handled = true;
             }
             else if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                PasteFromClipboard();
+                // Internal annotation clipboard takes priority over an OS-clipboard image paste.
+                if (_annotationClipboard.Count > 0) PasteAnnotations(PageList.SelectedIndex);
+                else PasteFromClipboard();
                 e.Handled = true;
             }
             else if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
@@ -10240,23 +11397,22 @@ namespace KillerPDF
         {
             switch (key)
             {
-                // Tools are reachable by their toolbar position (1-9, left to right); the original letter
+                // Tools are reachable by their toolbar position (1-8, left to right); the original letter
                 // keys stay as fallbacks. Both the number-row and numpad digits map.
                 case Key.V: case Key.D1: case Key.NumPad1: SetTool(EditTool.Select);        return true;
                 case Key.T: case Key.D2: case Key.NumPad2: SetTool(EditTool.Text);          return true;
-                case Key.U: case Key.D3: case Key.NumPad3: SetTool(EditTool.Underline);     return true;
-                case Key.K: case Key.D4: case Key.NumPad4: SetTool(EditTool.Strikethrough); return true;
-                case Key.H: case Key.D5: case Key.NumPad5: SetTool(EditTool.Highlight);     return true;
-                case Key.D: case Key.D6: case Key.NumPad6: SetTool(EditTool.Draw);          return true;
-                case Key.I: case Key.D7: case Key.NumPad7: SetTool(EditTool.Image);         return true;
-                case Key.G: case Key.D8: case Key.NumPad8: ToolSignature_Click(this, new RoutedEventArgs()); return true;
-                case Key.C: case Key.D9: case Key.NumPad9: SetTool(EditTool.Crop);          return true;
+                case Key.L: case Key.U: case Key.D3: case Key.NumPad3: SetTool(EditTool.Line); return true;
+                case Key.H: case Key.D4: case Key.NumPad4: SetTool(EditTool.Highlight);     return true;
+                case Key.D: case Key.D5: case Key.NumPad5: SetTool(EditTool.Draw);          return true;
+                case Key.I: case Key.D6: case Key.NumPad6: SetTool(EditTool.Image);         return true;
+                case Key.G: case Key.D7: case Key.NumPad7: ToolSignature_Click(this, new RoutedEventArgs()); return true;
+                case Key.C: case Key.D8: case Key.NumPad8: SetTool(EditTool.Crop);          return true;
                 default:    return false;
             }
         }
 
-        // Appends each tool's toolbar position (1-9) to its tooltip, e.g. "Highlight (5)". Re-resolves the
-        // localized base text so a language switch keeps the right wording (re-run from SelectLocale).
+        // Appends each tool's toolbar position (1-8, left to right) to its tooltip, e.g. "Highlight (4)".
+        // Re-resolves the localized base text so a language switch keeps the right wording (from SelectLocale).
         private void ApplyToolNumberTooltips()
         {
             void Set(System.Windows.Controls.Button btn, string key, int n)
@@ -10265,13 +11421,13 @@ namespace KillerPDF
             }
             Set(ToolSelectBtn,    "Str_TT_SelectTool",    1);
             Set(ToolTextBtn,      "Str_TT_TextTool",      2);
-            Set(ToolUnderlineBtn, "Str_TT_UnderlineTool", 3);
-            Set(ToolStrikeBtn,    "Str_TT_StrikeTool",    4);
-            Set(ToolHighlightBtn, "Str_TT_HighlightTool", 5);
-            Set(ToolDrawBtn,      "Str_TT_DrawTool",      6);
-            Set(ToolImageBtn,     "Str_TT_ImageTool",     7);
-            Set(ToolSignatureBtn, "Str_TT_SignatureTool", 8);
-            Set(ToolCropBtn,      "Str_TT_CropTool",      9);
+            Set(ToolUnderlineBtn, "Str_TT_LineTool", 3);   // repurposed to the Line tool
+            // ToolStrikeBtn is hidden (Line replaced it); no tooltip needed.
+            Set(ToolHighlightBtn, "Str_TT_HighlightTool", 4);
+            Set(ToolDrawBtn,      "Str_TT_DrawTool",      5);
+            Set(ToolImageBtn,     "Str_TT_ImageTool",     6);
+            Set(ToolSignatureBtn, "Str_TT_SignatureTool", 7);
+            Set(ToolCropBtn,      "Str_TT_CropTool",      8);
         }
 
         // ============================================================
@@ -10300,6 +11456,21 @@ namespace KillerPDF
             _undoStack.Push(new UndoEntry(UndoKind.Document, DocBytes: ms.ToArray(), WasDirty: _isDirty));
         }
 
+        // Snapshot one page's annotations (deep clones) onto the undo stack so an in-place edit - erase,
+        // group/ungroup, layer reorder, unpair, delete - reverts with a single Ctrl+Z. Call BEFORE mutating.
+        private void PushPageSnapshotUndo(int pageIdx) => PushPagesSnapshotUndo([pageIdx]);
+
+        // Multi-page variant (e.g. deleting a selection that spans pages).
+        private void PushPagesSnapshotUndo(IEnumerable<int> pages)
+        {
+            var snap = new Dictionary<int, List<PageAnnotation>>();
+            foreach (int p in pages.Distinct())
+                if (_annotations.TryGetValue(p, out var list))
+                    snap[p] = list.Select(CloneAnnotation).Where(c => c is not null).Cast<PageAnnotation>().ToList();
+            if (snap.Count > 0)
+                _undoStack.Push(new UndoEntry(UndoKind.PageSnapshot, WasDirty: _isDirty, AnnotSnapshot: snap));
+        }
+
         // Height (canvas units) that the wrapped text needs at the given box width and font size, so a
         // text box can auto-grow to fit its content. Includes the 2px inner padding used everywhere.
         private static double MeasureTextBoxHeight(string text, double width, double fontSize)
@@ -10317,11 +11488,17 @@ namespace KillerPDF
         {
             // A fixed W x H box: optional fill background, text wrapped to the width and clipped to the
             // height (so a free-form-resized box behaves like an image/crop frame).
+            FontFamily famsel;
+            try { famsel = new FontFamily(string.IsNullOrEmpty(ta.FontName) ? "Segoe UI" : ta.FontName); }
+            catch { famsel = new FontFamily("Segoe UI"); }
             var tb = new TextBlock
             {
                 Text = ta.Content,
                 Foreground = new SolidColorBrush(ta.GetColor()),
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = famsel,
+                FontWeight = ta.Bold ? FontWeights.Bold : FontWeights.Normal,
+                FontStyle = ta.Italic ? FontStyles.Italic : FontStyles.Normal,
+                TextDecorations = BuildDecorations(ta.Underline, ta.Strike),
                 FontSize = ta.FontSize,
                 Padding = new Thickness(2),
                 TextWrapping = TextWrapping.Wrap,
@@ -10564,6 +11741,17 @@ namespace KillerPDF
                 MarkDirty(entry.WasDirty);
                 SetStatus("Restored cleared annotations");
             }
+            else if (entry.Kind == UndoKind.PageSnapshot && entry.AnnotSnapshot is not null)
+            {
+                // Restore the affected page(s) to their pre-edit state - reverts erase, group/ungroup,
+                // layer reorder, unpair or delete in one Ctrl+Z. The snapshot holds deep clones.
+                foreach (var kv in entry.AnnotSnapshot)
+                    _annotations[kv.Key] = [.. kv.Value];
+                ClearSelection();
+                RenderAnnotationsOnAllVisiblePages();
+                MarkDirty(entry.WasDirty);
+                SetStatus("Undone");
+            }
             else // Document snapshot
             {
                 if (entry.DocBytes is null) return;
@@ -10765,8 +11953,9 @@ namespace KillerPDF
                 }
                 else
                 {
-                    // AccentLogo is green (visible) in every theme and tracks theme switches
-                    _saveAsBtnRef.SetResourceReference(Control.ForegroundProperty, "AccentLogo");
+                    // Saved / clean: just a normal toolbar icon (no colour). The orange above is the only
+                    // signal, reserved for "you have unsaved changes".
+                    _saveAsBtnRef.SetResourceReference(Control.ForegroundProperty, "TextPrimary");
                     _saveAsBtnRef.Effect = null;
                 }
             }
@@ -11084,8 +12273,7 @@ namespace KillerPDF
                 menu.Items.Add(MakeMenuItem(Loc("Str_Menu_Save"), (_, _) => SaveInPlace(), "Ctrl+S"));
                 menu.Items.Add(MakeMenuItem(Loc("Str_Menu_SaveAs"), (s2, e2) => SaveAs_Click(s2, e2), "Ctrl+Shift+S"));
                 menu.Items.Add(new Separator());
-                // TODO localize "Digital Signature..." once the dialog is finalized.
-                menu.Items.Add(MakeMenuItem("Digital Signature...", (_, _) => OpenSignDialog()));
+                menu.Items.Add(MakeMenuItem(Loc("Str_Lbl_DigitalSig"), (_, _) => OpenSignDialog()));
             }
 
             menu.PlacementTarget = (UIElement)sender;
@@ -11101,7 +12289,10 @@ namespace KillerPDF
                 KillerDialog.Show(this, "Open a PDF first.");
                 return;
             }
-            new SignDocumentDialog(this, _currentFile!).ShowDialog();
+            // Sign the user's real document, not the temp working copy. Operations like print/crop/repair
+            // repoint _currentFile at a temp (e.g. "...printfixed...") while _originalFile keeps the real
+            // path - which is the name the user expects to see and the file Save targets.
+            new SignDocumentDialog(this, _originalFile ?? _currentFile!).ShowDialog();
         }
 
         private void Merge_Click(object sender, RoutedEventArgs e)
@@ -11966,7 +13157,16 @@ namespace KillerPDF
                                 gfx.DrawRectangle(new XSolidBrush(XColor.FromArgb(fc.A, fc.R, fc.G, fc.B)),
                                     tboxX, tboxY, Math.Max(1, tboxW), Math.Max(1, tboxH));
                             }
-                            var font = new XFont("Segoe UI", ta.FontSize * sy);
+                            // Match the on-screen typeface + B/I/S. Strikeout is a font-style flag PDFsharp
+                            // draws as a line. Fall back to Segoe UI if the font can't be resolved/embedded.
+                            var xstyle = XFontStyle.Regular;
+                            if (ta.Bold) xstyle |= XFontStyle.Bold;
+                            if (ta.Italic) xstyle |= XFontStyle.Italic;
+                            if (ta.Strike) xstyle |= XFontStyle.Strikeout;
+                            if (ta.Underline) xstyle |= XFontStyle.Underline;
+                            XFont font;
+                            try { font = new XFont(string.IsNullOrEmpty(ta.FontName) ? "Segoe UI" : ta.FontName, ta.FontSize * sy, xstyle); }
+                            catch { font = new XFont("Segoe UI", ta.FontSize * sy, xstyle); }
                             var taColor = ta.GetColor();
                             var taBrush = new XSolidBrush(XColor.FromArgb(taColor.A, taColor.R, taColor.G, taColor.B));
                             // Wrap inside the box, matching the on-screen TextWrapping=Wrap. The 2px editor
@@ -12391,7 +13591,7 @@ namespace KillerPDF
             ApplyZoom();
             SyncZoomBox();
             if (_doc != null && PageList.SelectedIndex >= 0)
-                SetStatus($"Page {PageList.SelectedIndex + 1} of {_doc.PageCount} - {DisplayZoomPct():F0}%");
+                SetStatus(string.Format(Loc("Str_PageOf"), PageList.SelectedIndex + 1, _doc.PageCount) + $" - {DisplayZoomPct():F0}%");
         }
 
         private void ZoomIn_Click(object sender, RoutedEventArgs e)  { if (_viewMode == ViewMode.Grid) GridZoomStep(false); else SetZoom(_zoomLevel + ZoomStep); }
@@ -12461,7 +13661,7 @@ namespace KillerPDF
                 _zoomLevel = Math.Max(ZoomMin, Math.Min(ZoomMax, z / zf));
                 ApplyZoom();
                 if (PageList.SelectedIndex >= 0 && _doc != null)
-                    SetStatus($"Page {PageList.SelectedIndex + 1} of {_doc.PageCount} - {DisplayZoomPct():F0}%");
+                    SetStatus(string.Format(Loc("Str_PageOf"), PageList.SelectedIndex + 1, _doc.PageCount) + $" - {DisplayZoomPct():F0}%");
             }
         }
 
@@ -12573,29 +13773,33 @@ namespace KillerPDF
 
         private void PagePreviewPanel_SizeChanged(object sender, SizeChangedEventArgs e)
         {
-            RepositionAnnotationBars();   // keep the draw/text bar on its anchored edge as the pane resizes
+            RepositionAnnotationBars();   // cheap; keep the draw/text bar tracking its anchored edge
             if (_cropPreviewRect is not null || _cropConfirmBar is not null) return;
+
+            // Interactive edge-drag: defer ALL document rescaling to release. This window is
+            // AllowsTransparency=True, so Windows recomposites the whole frame on the CPU every resize
+            // tick; stacking a per-tick layout pass (the lite rescale relayouts the page subtree and the
+            // scroll extent) on top of that is what makes the page judder. The page holds its current size
+            // during the drag and snaps to the new fit exactly once, on WM_EXITSIZEMOVE -> OnResizeSettled.
+            if (_inResizeLoop) return;
 
             if (_viewMode == ViewMode.Grid)
             {
                 // Grid columns depend only on width, so a height-only resize (e.g. dragging the bottom
                 // edge) changes nothing - skip it so it doesn't needlessly re-render/blink.
                 if (!e.WidthChanged) return;
-                // Hold the column count through the resize: scale the already-laid-out tiles via the
-                // transform so the same number of columns fills the new width. This is lite-only (no
-                // re-render), so it can't toggle tiles/scrollbars into the feedback loop the grid used to
-                // fear - and with the vertical scrollbar reserved (above), the width stays stable too.
+                // Hold the column count through a non-modal resize: scale the already-laid-out tiles via
+                // the transform so the same number of columns fills the new width (lite, no re-render).
                 if (_doc is null || _gridColumns < 1) return;
                 double rdWg = _annotationCanvas.Width > 0 ? _annotationCanvas.Width : 1583;
                 if (PagePreviewPanel.ActualWidth <= 0 || rdWg <= 0) return;
                 _zoomLevel = Math.Max(ZoomMin, Math.Min(ZoomMax, GridZoomForN(_gridColumns)));
                 ApplyZoom(lite: true);
-                StartResizeSettleTimer();   // crisp re-render once the drag settles
+                StartResizeSettleTimer();
                 return;
             }
 
-            // Live: rescale the page(s) already on screen via the ScaleTransform only (lite). This
-            // tracks the drag smoothly without re-rendering, so there's no flicker mid-resize.
+            // Non-modal resize (maximize/restore, splitter, programmatic): rescale lite + settle.
             if (_fitMode == FitMode.Width) FitToWidth(lite: true);
             else if (_fitMode == FitMode.Page) FitToPage(lite: true);
             StartResizeSettleTimer();
@@ -12623,10 +13827,12 @@ namespace KillerPDF
                 // settles in one pass instead of looping.
                 if (_doc is not null && _gridColumns >= 1)
                     SetZoom(Math.Max(ZoomMin, Math.Min(ZoomMax, GridZoomForN(_gridColumns))));
+                RepositionAnnotationBars();   // settle the bar against the final pane size
                 return;
             }
             if (_fitMode == FitMode.Width) FitToWidth();
             else if (_fitMode == FitMode.Page) FitToPage();
+            RepositionAnnotationBars();   // settle the bar against the final pane size (scrollbar may have toggled)
         }
 
         private void PagePreviewPanel_PreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -13405,6 +14611,9 @@ namespace KillerPDF
                     if (_viewMode != ViewMode.TwoPage) PageList.SelectedIndex = rcPage;
                     if (_annotationCanvas.ContextMenu is ContextMenu cm)
                     {
+                        // Selection chrome draws on _activeCanvas, so point it at this tile before populating.
+                        _activeCanvas = (Canvas)s;
+                        PopulateContextMenu(ev.GetPosition((Canvas)s), rcPage);
                         cm.PlacementTarget = (UIElement)s;
                         cm.IsOpen = true;
                         ev.Handled = true;

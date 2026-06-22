@@ -37,7 +37,7 @@
     <SolidColorBrush x:Key="DragLine"       Color="#0e5276" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgScrollThumb"  Color="#aae0d49a" po:Freeze="True"/>
     <SolidColorBrush x:Key="ScrollThumbHover" Color="#f2ead0" po:Freeze="True"/>
-    <SolidColorBrush x:Key="SliderTrack"    Color="#001b2b" po:Freeze="True"/>
+    <SolidColorBrush x:Key="SliderTrack"    Color="#000d15" po:Freeze="True"/>
     <SolidColorBrush x:Key="RadioAccent"    Color="#e0d49a" po:Freeze="True"/>
     <SolidColorBrush x:Key="BgOverlay"      Color="#CC002d42" po:Freeze="True"/>
     <sys:Double x:Key="GrainOpacity">0.26</sys:Double>

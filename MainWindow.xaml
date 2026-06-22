@@ -8,9 +8,9 @@
         Title="KillerPDF" Height="700" Width="1000" MinHeight="480" MinWidth="620"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
-        AllowsTransparency="True"
+        AllowsTransparency="False"
         ResizeMode="CanResizeWithGrip"
-        Background="Transparent"
+        Background="{DynamicResource BgCanvas}"
         FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI"
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType"
@@ -33,15 +33,44 @@
         <ImageBrush x:Key="GrainBrushShared" TileMode="Tile"
                     ViewportUnits="Absolute" Viewport="0,0,256,256" Stretch="None"/>
 
+        <!-- Settings section subheaders: white with a faint depth shadow (the "Settings" title carries the
+             accent colour instead). Margin stays inline per row. -->
+        <Style x:Key="SettingsSubheader" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI, Microsoft JhengHei UI, Nirmala UI"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="Black" BlurRadius="3" ShadowDepth="1" Direction="270" Opacity="0.5"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Settings current-value labels (English, Dark, ...): accent-coloured, with a depth shadow so the
+             accent stays legible on every theme background. -->
+        <Style x:Key="SettingsAccentValue" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI, Microsoft JhengHei UI, Nirmala UI"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource HeaderAccent}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="Black" BlurRadius="3" ShadowDepth="1" Direction="270" Opacity="0.55"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Overflow menu row button -->
         <Style x:Key="OverflowMenuButton" TargetType="Button">
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="b" Background="Transparent" CornerRadius="3" Padding="8,5">
+                        <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="3" Padding="8,5">
                             <ContentPresenter VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -891,6 +920,12 @@
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="dot" Property="Visibility" Value="Visible"/>
                                 <Setter TargetName="ring" Property="Stroke" Value="{DynamicResource RadioAccent}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource RadioAccent}"/>
+                                <Setter TargetName="bd" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect Color="Black" BlurRadius="3" ShadowDepth="1" Direction="270" Opacity="0.5"/>
+                                    </Setter.Value>
+                                </Setter>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="ring" Property="Stroke" Value="{DynamicResource RadioAccent}"/>
@@ -1006,8 +1041,8 @@
                     <StackPanel x:Name="RightBar" Orientation="Horizontal">
                     <Button x:Name="ToolSelectBtn" Content="&#xE8B0;" Style="{StaticResource ToolbarButton}" Click="ToolSelect_Click" ToolTip="{DynamicResource Str_TT_SelectTool}"/>
                     <Button x:Name="ToolTextBtn" Content="&#xE8D2;" Style="{StaticResource ToolbarButton}" Click="ToolText_Click" ToolTip="{DynamicResource Str_TT_TextTool}"/>
-                    <Button x:Name="ToolUnderlineBtn" Content="&#xE8DC;" Style="{StaticResource ToolbarButton}" Click="ToolUnderline_Click" ToolTip="{DynamicResource Str_TT_UnderlineTool}"/>
-                    <Button x:Name="ToolStrikeBtn" Content="&#xEDE0;" Style="{StaticResource ToolbarButton}" Click="ToolStrike_Click" ToolTip="{DynamicResource Str_TT_StrikeTool}"/>
+                    <Button x:Name="ToolUnderlineBtn" Content="&#xE738;" Style="{StaticResource ToolbarButton}" Click="ToolLine_Click" ToolTip="{DynamicResource Str_TT_LineTool}"/>
+                    <Button x:Name="ToolStrikeBtn" Content="&#xEDE0;" Style="{StaticResource ToolbarButton}" Click="ToolStrike_Click" ToolTip="{DynamicResource Str_TT_StrikeTool}" Visibility="Collapsed"/>
                     <Button x:Name="ToolHighlightBtn" Content="&#xE7E6;" Style="{StaticResource ToolbarButton}" Click="ToolHighlight_Click" ToolTip="{DynamicResource Str_TT_HighlightTool}"/>
                     <Button x:Name="ToolDrawBtn" Content="&#xED63;" Style="{StaticResource ToolbarButton}" Click="ToolDraw_Click" ToolTip="{DynamicResource Str_TT_DrawTool}"/>
                     <Button x:Name="ToolImageBtn" Content="&#xEB9F;" Style="{StaticResource ToolbarButton}" Click="ToolImage_Click" ToolTip="{DynamicResource Str_TT_ImageTool}"/>
@@ -1086,8 +1121,8 @@
                                 <Button x:Name="MiText" Style="{StaticResource OverflowMenuButton}" Visibility="Collapsed" Click="ToolText_Click">
                                     <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8D2;" FontFamily="Segoe MDL2 Assets" FontSize="14" Width="24" Foreground="{DynamicResource TextPrimary}"/><TextBlock Text="{DynamicResource Str_Lbl_Text}" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/></StackPanel>
                                 </Button>
-                                <Button x:Name="MiUnderline" Style="{StaticResource OverflowMenuButton}" Visibility="Collapsed" Click="ToolUnderline_Click">
-                                    <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8DC;" FontFamily="Segoe MDL2 Assets" FontSize="14" Width="24" Foreground="{DynamicResource TextPrimary}"/><TextBlock Text="{DynamicResource Str_Lbl_Underline}" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/></StackPanel>
+                                <Button x:Name="MiUnderline" Style="{StaticResource OverflowMenuButton}" Visibility="Collapsed" Click="ToolLine_Click">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="14" Width="24" Foreground="{DynamicResource TextPrimary}"/><TextBlock Text="{DynamicResource Str_Lbl_Line}" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/></StackPanel>
                                 </Button>
                                 <Button x:Name="MiStrike" Style="{StaticResource OverflowMenuButton}" Visibility="Collapsed" Click="ToolStrike_Click">
                                     <StackPanel Orientation="Horizontal"><TextBlock Text="&#xEDE0;" FontFamily="Segoe MDL2 Assets" FontSize="14" Width="24" Foreground="{DynamicResource TextPrimary}"/><TextBlock Text="{DynamicResource Str_Lbl_Strike}" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/></StackPanel>
@@ -1129,7 +1164,7 @@
                      swaps which column is the sized sidebar (24-260px) and which is the star document
                      area, and repoints _sidebarCol accordingly. SidebarCol never collapses to 0 - it
                      shrinks to 24px (the toggle strip width). -->
-                <ColumnDefinition x:Name="SidebarCol" Width="180" MinWidth="24" MaxWidth="260"/>
+                <ColumnDefinition x:Name="SidebarCol" Width="180" MinWidth="24" MaxWidth="234"/>
                 <!-- Dedicated drag handle column — keeps the splitter independent of the sidebar content -->
                 <ColumnDefinition Width="6"/>
                 <ColumnDefinition x:Name="DocCol" Width="*"/>
@@ -1248,7 +1283,9 @@
                                         <Border x:Name="ThumbBorder"
                                                 Background="White"
                                                 BorderBrush="{DynamicResource BgDark}"
-                                                BorderThickness="1">
+                                                BorderThickness="1"
+                                                MaxWidth="200"
+                                                HorizontalAlignment="Center">
                                             <Image Source="{Binding Thumbnail}"
                                                    Stretch="Uniform"/>
                                         </Border>
@@ -1665,7 +1702,8 @@
               Grid.RowSpan="5"
               Panel.ZIndex="9999"
               Visibility="Collapsed">
-            <Grid x:Name="SettingsPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="186,0,0,36" Width="228">
+            <Grid x:Name="SettingsPanel" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="186,0,0,28" Width="228"
+                  MaxHeight="{Binding ActualHeight, ElementName=DocPaneBorder}">
                 <!-- Left edge stays flush against the sidebar's right edge; the panel expands rightward
                      out of the sidebar (its Width animates) and shrinks back into it on close. The inner
                      borders keep a fixed width so the content doesn't reflow while the Grid is clipped. -->
@@ -1702,15 +1740,18 @@
                     <Grid x:Name="SettingsHeader" Background="Transparent" Margin="0,0,0,12">
                         <TextBlock Text="{DynamicResource Str_Settings}"
                                    FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="14" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextPrimary}"
-                                   HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                   Foreground="{DynamicResource HeaderAccent}"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center">
+                            <TextBlock.Effect>
+                                <DropShadowEffect Color="Black" BlurRadius="3" ShadowDepth="1" Direction="270" Opacity="0.55"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
                         <Button Click="SettingsOverlayClose_Click"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Width="24" Height="24" Content="&#xE711;"
                                 Style="{StaticResource DangerCloseButton}"/>
                     </Grid>
-                    <TextBlock Text="{DynamicResource Str_Language}" Foreground="{DynamicResource HeaderAccent}"
-                               FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
+                    <TextBlock Text="{DynamicResource Str_Language}" Style="{StaticResource SettingsSubheader}"
                                Margin="0,0,0,8"/>
                     <!-- Language picker: a row that opens a flyout submenu. Languages are
                          listed by their own native name (autonym) so the list scales to any
@@ -1753,10 +1794,7 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <TextBlock x:Name="LangCurrentLabel" Text="English"
-                                           FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
-                                           Foreground="{DynamicResource TextPrimary}"
-                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LangCurrentLabel" Text="English" Style="{StaticResource SettingsAccentValue}"/>
                             </DockPanel>
                         </ToggleButton>
                         </Grid>
@@ -1841,8 +1879,7 @@
                                         </Grid>
                                     </RadioButton>
                         </StackPanel>
-                    <TextBlock Text="{DynamicResource Str_Theme}" Foreground="{DynamicResource HeaderAccent}"
-                               FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
+                    <TextBlock Text="{DynamicResource Str_Theme}" Style="{StaticResource SettingsSubheader}"
                                Margin="0,12,0,8"/>
                     <!-- Theme picker: a row that opens a flyout submenu, mirroring the Language picker
                          so the Settings panel stays compact as more themes are added. -->
@@ -1884,10 +1921,7 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <TextBlock x:Name="ThemeCurrentLabel" Text="Dark"
-                                           FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
-                                           Foreground="{DynamicResource TextPrimary}"
-                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ThemeCurrentLabel" Text="Dark" Style="{StaticResource SettingsAccentValue}"/>
                             </DockPanel>
                         </ToggleButton>
                         </Grid>
@@ -1951,8 +1985,7 @@
                                                  Style="{StaticResource ThemeRadio}"
                                                  Checked="ThemeCyanoticRadio_Checked"/>
                         </StackPanel>
-                    <TextBlock Text="{DynamicResource Str_Toolbar}" Foreground="{DynamicResource HeaderAccent}"
-                               FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
+                    <TextBlock Text="{DynamicResource Str_Toolbar}" Style="{StaticResource SettingsSubheader}"
                                Margin="0,12,0,8"/>
                     <!-- Toolbar style picker: a flyout submenu mirroring Theme/Language. -->
                     <Grid Margin="0,0,0,4">
@@ -1993,10 +2026,7 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <TextBlock x:Name="ToolbarCurrentLabel" Text="Text beside icons"
-                                           FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
-                                           Foreground="{DynamicResource TextPrimary}"
-                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ToolbarCurrentLabel" Text="Text beside icons" Style="{StaticResource SettingsAccentValue}"/>
                             </DockPanel>
                         </ToggleButton>
                         </Grid>
@@ -2028,8 +2058,7 @@
                                                  Checked="ToolbarOnlyRadio_Checked"/>
                         </StackPanel>
                     <!-- Sidebar position picker (Left / Right) -->
-                    <TextBlock Text="SIDEBAR" Foreground="{DynamicResource HeaderAccent}"
-                               FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
+                    <TextBlock Text="SIDEBAR" Style="{StaticResource SettingsSubheader}"
                                Margin="0,12,0,8"/>
                     <Grid Margin="0,0,0,4">
                         <ToggleButton x:Name="SidebarMenuButton"
@@ -2068,10 +2097,7 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <TextBlock x:Name="SidebarCurrentLabel" Text="Left"
-                                           FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
-                                           Foreground="{DynamicResource TextPrimary}"
-                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="SidebarCurrentLabel" Text="Left" Style="{StaticResource SettingsAccentValue}"/>
                             </DockPanel>
                         </ToggleButton>
                     </Grid>
@@ -2084,8 +2110,7 @@
                                      Checked="SidebarRightRadio_Checked"/>
                     </StackPanel>
 
-                    <TextBlock Text="{DynamicResource Str_ViewMode}" Foreground="{DynamicResource HeaderAccent}"
-                               FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold"
+                    <TextBlock Text="{DynamicResource Str_ViewMode}" Style="{StaticResource SettingsSubheader}"
                                Margin="0,12,0,8"/>
                     <!-- View Mode picker: a flyout submenu, consistent with Theme/Language/Toolbar.
                          Stays open on selection so the user can try view modes back to back. -->
@@ -2127,10 +2152,7 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <TextBlock x:Name="ViewCurrentLabel" Text="Continuous"
-                                           FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="12"
-                                           Foreground="{DynamicResource TextPrimary}"
-                                           VerticalAlignment="Center"/>
+                                <TextBlock x:Name="ViewCurrentLabel" Text="Continuous" Style="{StaticResource SettingsAccentValue}"/>
                             </DockPanel>
                         </ToggleButton>
                         </Grid>
@@ -2222,13 +2244,12 @@
                                        FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold" Margin="0,12,0,4"/>
                             <DockPanel Margin="0,0,0,4"><TextBlock Text="1 (or V)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Select}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
                             <DockPanel Margin="0,0,0,4"><TextBlock Text="2 (or T)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Text}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="3 (or U)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Underline}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="4 (or K)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Strike}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="5 (or H)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Highlight}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="6 (or D)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Draw}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="7 (or I)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Image}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="8 (or G)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Signature}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,0"><TextBlock Text="9 (or C)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Crop}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="3 (or L)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Line}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="4 (or H)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Highlight}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="5 (or D)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Draw}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="6 (or I)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Image}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="7 (or G)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Signature}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,0"><TextBlock Text="8 (or C)" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Lbl_Crop}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
 
                             <TextBlock Text="{DynamicResource Str_KS_Help}" Foreground="{DynamicResource Accent}"
                                        FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold" Margin="0,12,0,4"/>

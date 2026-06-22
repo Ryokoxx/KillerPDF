@@ -281,4 +281,49 @@ Puede desinstalarla en cualquier momento desde Agregar o quitar programas.</sys:
     <sys:String x:Key="Str_TT_CropRemoveAll">Quitar CropBox de todas las páginas</sys:String>
     <sys:String x:Key="Str_TT_CropCancel">Cancelar (Escape)</sys:String>
 
+    <!-- ── Herramienta Línea, menú de capas / grupos (añadido v1.5.x) ──── -->
+    <sys:String x:Key="Str_Lbl_Line">Línea</sys:String>
+    <sys:String x:Key="Str_TT_LineTool">Línea: arrastra para dibujar una línea recta</sys:String>
+    <sys:String x:Key="Str_Ctx_Edit">Editar</sys:String>
+    <sys:String x:Key="Str_Ctx_Raise">Subir</sys:String>
+    <sys:String x:Key="Str_Ctx_Lower">Bajar</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectCover">Seleccionar fondo</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectText">Seleccionar texto</sys:String>
+    <sys:String x:Key="Str_Ctx_Unpair">Desvincular texto y fondo</sys:String>
+    <sys:String x:Key="Str_Ctx_Group">Agrupar selección</sys:String>
+    <sys:String x:Key="Str_Ctx_Ungroup">Desagrupar</sys:String>
+    <sys:String x:Key="Str_Ctx_RemoveFromGroup">Quitar del grupo</sys:String>
+    <sys:String x:Key="Str_Ctx_Copy">Copiar</sys:String>
+    <sys:String x:Key="Str_Ctx_Paste">Pegar</sys:String>
+    <!-- ── Etiquetas de la barra de anotación ─────────────────────────── -->
+    <sys:String x:Key="Str_Bar_Color">Color:</sys:String>
+    <sys:String x:Key="Str_Bar_Fill">Relleno:</sys:String>
+    <sys:String x:Key="Str_Bar_Size">Tamaño:</sys:String>
+    <sys:String x:Key="Str_Bar_Opacity">Opacidad:</sys:String>
+    <sys:String x:Key="Str_Bar_FillOpacity">Opacidad de relleno:</sys:String>
+    <sys:String x:Key="Str_Bar_Font">Fuente:</sys:String>
+    <sys:String x:Key="Str_Bar_Level">Nivelar</sys:String>
+    <sys:String x:Key="Str_Bar_Eraser">Borrador</sys:String>
+    <sys:String x:Key="Str_Bar_MoreColors">Más colores...</sys:String>
+    <sys:String x:Key="Str_Sig_Signatures">Firmas</sys:String>
+    <sys:String x:Key="Str_Sig_Initials">Iniciales</sys:String>
+    <sys:String x:Key="Str_Sig_Pen">Pluma</sys:String>
+    <sys:String x:Key="Str_Sig_Thin">Fina</sys:String>
+    <sys:String x:Key="Str_Sig_Medium">Media</sys:String>
+    <sys:String x:Key="Str_Sig_Thick">Gruesa</sys:String>
+    <!-- ── Diálogo de firma digital ───────────────────────────────────── -->
+    <sys:String x:Key="Str_Sign_Desc">Sella {0} con un certificado y guarda una copia firmada.</sys:String>
+    <sys:String x:Key="Str_Sign_Certificate">Certificado</sys:String>
+    <sys:String x:Key="Str_Sign_FromFile">Desde un archivo (.pfx / .p12)</sys:String>
+    <sys:String x:Key="Str_Sign_FromStore">Desde el almacén de certificados de Windows</sys:String>
+    <sys:String x:Key="Str_Sign_Browse">Examinar...</sys:String>
+    <sys:String x:Key="Str_Sign_Password">Contraseña</sys:String>
+    <sys:String x:Key="Str_Sign_Reason">Motivo (opcional)</sys:String>
+    <sys:String x:Key="Str_Sign_Location">Ubicación (opcional)</sys:String>
+    <sys:String x:Key="Str_Sign_Contact">Contacto (opcional)</sys:String>
+    <sys:String x:Key="Str_Sign_SaveAs">Guardar copia firmada como</sys:String>
+    <sys:String x:Key="Str_Sign_Sign">Firmar</sys:String>
+    <sys:String x:Key="Str_Sign_Cancel">Cancelar</sys:String>
+    <sys:String x:Key="Str_Sign_TitleSuffix">Firma digital</sys:String>
+    <sys:String x:Key="Str_Lbl_DigitalSig">Firma digital...</sys:String>
 </ResourceDictionary>

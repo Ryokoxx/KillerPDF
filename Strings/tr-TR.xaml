@@ -281,4 +281,49 @@ Bu işlem uygulamayı %LocalAppData%\KillerPDF konumuna kopyalar ve bir Başlat 
     <sys:String x:Key="Str_TT_CropRemoveAll">Tüm sayfalardan CropBox kaldır</sys:String>
     <sys:String x:Key="Str_TT_CropCancel">İptal (Escape)</sys:String>
 
+    <!-- ── Çizgi aracı, katman / grup menüsü (v1.5.x eklendi) ─────────── -->
+    <sys:String x:Key="Str_Lbl_Line">Çizgi</sys:String>
+    <sys:String x:Key="Str_TT_LineTool">Çizgi - düz bir çizgi çizmek için sürükleyin</sys:String>
+    <sys:String x:Key="Str_Ctx_Edit">Düzenle</sys:String>
+    <sys:String x:Key="Str_Ctx_Raise">Yükselt</sys:String>
+    <sys:String x:Key="Str_Ctx_Lower">Alçalt</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectCover">Örtüyü seç</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectText">Metni seç</sys:String>
+    <sys:String x:Key="Str_Ctx_Unpair">Metin ve örtüyü ayır</sys:String>
+    <sys:String x:Key="Str_Ctx_Group">Seçilenleri grupla</sys:String>
+    <sys:String x:Key="Str_Ctx_Ungroup">Grubu çöz</sys:String>
+    <sys:String x:Key="Str_Ctx_RemoveFromGroup">Gruptan çıkar</sys:String>
+    <sys:String x:Key="Str_Ctx_Copy">Kopyala</sys:String>
+    <sys:String x:Key="Str_Ctx_Paste">Yapıştır</sys:String>
+    <!-- ── Açıklama çubuğu etiketleri ──────────────────────────────────── -->
+    <sys:String x:Key="Str_Bar_Color">Renk:</sys:String>
+    <sys:String x:Key="Str_Bar_Fill">Dolgu:</sys:String>
+    <sys:String x:Key="Str_Bar_Size">Boyut:</sys:String>
+    <sys:String x:Key="Str_Bar_Opacity">Opaklık:</sys:String>
+    <sys:String x:Key="Str_Bar_FillOpacity">Dolgu Opaklığı:</sys:String>
+    <sys:String x:Key="Str_Bar_Font">Yazı tipi:</sys:String>
+    <sys:String x:Key="Str_Bar_Level">Düz</sys:String>
+    <sys:String x:Key="Str_Bar_Eraser">Silgi</sys:String>
+    <sys:String x:Key="Str_Bar_MoreColors">Daha fazla renk...</sys:String>
+    <sys:String x:Key="Str_Sig_Signatures">İmzalar</sys:String>
+    <sys:String x:Key="Str_Sig_Initials">Paraflar</sys:String>
+    <sys:String x:Key="Str_Sig_Pen">Kalem</sys:String>
+    <sys:String x:Key="Str_Sig_Thin">İnce</sys:String>
+    <sys:String x:Key="Str_Sig_Medium">Orta</sys:String>
+    <sys:String x:Key="Str_Sig_Thick">Kalın</sys:String>
+    <!-- ── Dijital İmza iletişim kutusu ───────────────────────────────── -->
+    <sys:String x:Key="Str_Sign_Desc">{0} dosyasını bir sertifikayla mühürler ve imzalı bir kopya kaydeder.</sys:String>
+    <sys:String x:Key="Str_Sign_Certificate">Sertifika</sys:String>
+    <sys:String x:Key="Str_Sign_FromFile">Bir dosyadan (.pfx / .p12)</sys:String>
+    <sys:String x:Key="Str_Sign_FromStore">Windows sertifika deposundan</sys:String>
+    <sys:String x:Key="Str_Sign_Browse">Gözat...</sys:String>
+    <sys:String x:Key="Str_Sign_Password">Parola</sys:String>
+    <sys:String x:Key="Str_Sign_Reason">Neden (isteğe bağlı)</sys:String>
+    <sys:String x:Key="Str_Sign_Location">Konum (isteğe bağlı)</sys:String>
+    <sys:String x:Key="Str_Sign_Contact">İletişim (isteğe bağlı)</sys:String>
+    <sys:String x:Key="Str_Sign_SaveAs">İmzalı kopyayı farklı kaydet</sys:String>
+    <sys:String x:Key="Str_Sign_Sign">İmzala</sys:String>
+    <sys:String x:Key="Str_Sign_Cancel">İptal</sys:String>
+    <sys:String x:Key="Str_Sign_TitleSuffix">Dijital İmza</sys:String>
+    <sys:String x:Key="Str_Lbl_DigitalSig">Dijital İmza...</sys:String>
 </ResourceDictionary>

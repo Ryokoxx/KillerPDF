@@ -281,4 +281,49 @@
     <sys:String x:Key="Str_TT_CropRemoveAll">সব পৃষ্ঠা থেকে CropBox সরান</sys:String>
     <sys:String x:Key="Str_TT_CropCancel">বাতিল করুন (Escape)</sys:String>
 
+    <!-- ── রেখা টুল, লেয়ার / গ্রুপ মেনু (v1.5.x এ যোগ করা হয়েছে) ──────────── -->
+    <sys:String x:Key="Str_Lbl_Line">রেখা</sys:String>
+    <sys:String x:Key="Str_TT_LineTool">রেখা - সরল রেখা আঁকতে টানুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Edit">সম্পাদনা করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Raise">উপরে তুলুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Lower">নিচে নামান</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectCover">কভার নির্বাচন করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_SelectText">টেক্সট নির্বাচন করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Unpair">টেক্সট ও কভার আলাদা করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Group">নির্বাচিত গ্রুপ করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Ungroup">গ্রুপ বাতিল করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_RemoveFromGroup">গ্রুপ থেকে সরান</sys:String>
+    <sys:String x:Key="Str_Ctx_Copy">কপি করুন</sys:String>
+    <sys:String x:Key="Str_Ctx_Paste">পেস্ট করুন</sys:String>
+    <!-- ── টীকা বার লেবেল ──────────────────────────────────────────────── -->
+    <sys:String x:Key="Str_Bar_Color">রং:</sys:String>
+    <sys:String x:Key="Str_Bar_Fill">ফিল:</sys:String>
+    <sys:String x:Key="Str_Bar_Size">আকার:</sys:String>
+    <sys:String x:Key="Str_Bar_Opacity">অস্বচ্ছতা:</sys:String>
+    <sys:String x:Key="Str_Bar_FillOpacity">ফিল অস্বচ্ছতা:</sys:String>
+    <sys:String x:Key="Str_Bar_Font">ফন্ট:</sys:String>
+    <sys:String x:Key="Str_Bar_Level">সমতল</sys:String>
+    <sys:String x:Key="Str_Bar_Eraser">ইরেজার</sys:String>
+    <sys:String x:Key="Str_Bar_MoreColors">আরও রং...</sys:String>
+    <sys:String x:Key="Str_Sig_Signatures">স্বাক্ষর</sys:String>
+    <sys:String x:Key="Str_Sig_Initials">আদ্যক্ষর</sys:String>
+    <sys:String x:Key="Str_Sig_Pen">কলম</sys:String>
+    <sys:String x:Key="Str_Sig_Thin">পাতলা</sys:String>
+    <sys:String x:Key="Str_Sig_Medium">মাঝারি</sys:String>
+    <sys:String x:Key="Str_Sig_Thick">মোটা</sys:String>
+    <!-- ── ডিজিটাল স্বাক্ষর ডায়ালগ ─────────────────────────────────────── -->
+    <sys:String x:Key="Str_Sign_Desc">একটি সার্টিফিকেট দিয়ে {0} সিল করে এবং একটি স্বাক্ষরিত কপি সংরক্ষণ করে।</sys:String>
+    <sys:String x:Key="Str_Sign_Certificate">সার্টিফিকেট</sys:String>
+    <sys:String x:Key="Str_Sign_FromFile">একটি ফাইল থেকে (.pfx / .p12)</sys:String>
+    <sys:String x:Key="Str_Sign_FromStore">Windows সার্টিফিকেট স্টোর থেকে</sys:String>
+    <sys:String x:Key="Str_Sign_Browse">ব্রাউজ...</sys:String>
+    <sys:String x:Key="Str_Sign_Password">পাসওয়ার্ড</sys:String>
+    <sys:String x:Key="Str_Sign_Reason">কারণ (ঐচ্ছিক)</sys:String>
+    <sys:String x:Key="Str_Sign_Location">অবস্থান (ঐচ্ছিক)</sys:String>
+    <sys:String x:Key="Str_Sign_Contact">যোগাযোগ (ঐচ্ছিক)</sys:String>
+    <sys:String x:Key="Str_Sign_SaveAs">স্বাক্ষরিত কপি যেভাবে সংরক্ষণ করুন</sys:String>
+    <sys:String x:Key="Str_Sign_Sign">স্বাক্ষর করুন</sys:String>
+    <sys:String x:Key="Str_Sign_Cancel">বাতিল করুন</sys:String>
+    <sys:String x:Key="Str_Sign_TitleSuffix">ডিজিটাল স্বাক্ষর</sys:String>
+    <sys:String x:Key="Str_Lbl_DigitalSig">ডিজিটাল স্বাক্ষর...</sys:String>
 </ResourceDictionary>

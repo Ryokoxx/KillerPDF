@@ -168,6 +168,16 @@ namespace KillerPDF.Services
                     target[key] = accentDict[key];
             }
 
+            // "PDF" wordmark colour. In the accent-capable families (Dark/Light/Black) it tracks the chosen
+            // accent; in the bold fixed-colour themes (Blood/Greed/Cyanotic) it reads as TextSecondary so it
+            // doesn't fight their loud accents. AccentLogo is the brush the wordmark (and a few other marks)
+            // bind to; pointing it at the live Accent/TextSecondary brush updates them all via DynamicResource.
+            {
+                var live = merged[0];
+                object src = HasAccents(theme) ? live["Accent"] : live["TextSecondary"];
+                if (src is not null) live["AccentLogo"] = src;
+            }
+
             // One SystemIdle pass to nudge any elements whose effective value didn't auto-update
             // (e.g. ControlTemplate trigger bindings with TargetName that missed the per-key signal).
             Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.SystemIdle, (Action)RefreshIcons);
