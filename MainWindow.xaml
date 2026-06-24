@@ -1519,7 +1519,9 @@
                     <Grid>
                         <Border IsHitTestVisible="False" Opacity="{DynamicResource GrainOpacity}" Background="{StaticResource GrainBrushShared}"/>
                         <Border x:Name="TabStripFade" IsHitTestVisible="False" Background="{DynamicResource TabStripFadeBrush}"/>
-                        <ScrollViewer x:Name="TabScroll" Margin="6,0,0,0" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Hidden">
+                        <ScrollViewer x:Name="TabScroll" Margin="6,0,0,0" VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Hidden"
+                                      WindowChrome.IsHitTestVisibleInChrome="True" Background="Transparent"
+                                      MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                             <StackPanel x:Name="TabStrip" Orientation="Horizontal" Margin="1,0,6,0"/>
                         </ScrollViewer>
                     </Grid>

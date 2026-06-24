@@ -480,6 +480,38 @@ namespace KillerPDF
             // A visible signature popup is built with Loc() too; rebuild it so its section headers and
             // pen labels switch immediately.
             RefreshSignaturePopupLanguage();
+
+            // The fit-mode terms differ in length per language; resize the zoom box so the longest never clips.
+            AdjustZoomBoxWidth();
+        }
+
+        // Size the editable zoom ComboBox to its widest item in the CURRENT language, so localized fit-mode
+        // terms (e.g. French "Ajuster a la largeur") are never clipped. Re-run on locale change and at load.
+        private void AdjustZoomBoxWidth()
+        {
+            if (ZoomBox is null) return;
+            try
+            {
+                double pixelsPerDip = VisualTreeHelper.GetDpi(ZoomBox).PixelsPerDip;
+                var typeface = new System.Windows.Media.Typeface(
+                    ZoomBox.FontFamily, ZoomBox.FontStyle, ZoomBox.FontWeight, ZoomBox.FontStretch);
+                double emSize = ZoomBox.FontSize > 0 ? ZoomBox.FontSize : 12;
+                double max = 0;
+                foreach (var item in ZoomBox.Items)
+                {
+                    string text = item is System.Windows.Controls.ComboBoxItem ci
+                        ? ci.Content?.ToString() ?? ""
+                        : item?.ToString() ?? "";
+                    var ft = new System.Windows.Media.FormattedText(
+                        text, System.Globalization.CultureInfo.CurrentCulture, System.Windows.FlowDirection.LeftToRight,
+                        typeface, emSize, System.Windows.Media.Brushes.Black, pixelsPerDip);
+                    if (ft.WidthIncludingTrailingWhitespace > max) max = ft.WidthIncludingTrailingWhitespace;
+                }
+                // measured text + editable text-box left margin (5) + chevron column (18) + borders (2),
+                // plus a 3px safety margin so the longest term never clips.
+                ZoomBox.Width = System.Math.Ceiling(max) + 28;
+            }
+            catch { /* best-effort; leave the XAML default width */ }
         }
 
         // Native name (autonym) for each language, shown in the picker regardless of UI locale.

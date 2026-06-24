@@ -339,6 +339,7 @@ namespace KillerPDF
             if (string.Equals(App.GetSetting("SidebarSide"), "Right", StringComparison.OrdinalIgnoreCase))
                 _sidebarRight = true;
             RestoreToolSettings();   // Draw + Text tool styles carry across sessions
+            Loaded += (_, _) => AdjustZoomBoxWidth();   // fit the zoom box to the longest localized term
             IndexToolbarButtons();
             OutlineTree.SelectedItemChanged += OutlineTree_SelectedItemChanged;
             LoadSignatures();

@@ -728,8 +728,12 @@ namespace KillerPDF
                 if (close.IsMouseOver) return;   // let the close button handle its own click
                 _tabDragSession = s;
                 _tabDragStart = e.GetPosition(TabStrip);
+                _tabGrabDX = e.GetPosition(bd).X;   // cursor offset within the tab, so it tracks under the grab point
                 _tabDragging = false;
                 bd.CaptureMouse();
+                // Own the press entirely so it can't bubble to the title-bar's window-drag handler, and so
+                // the mouse capture (not the caption hit-test) drives the drag - making it Y-independent.
+                e.Handled = true;
             };
             bd.PreviewMouseMove += (_, e) =>
             {
@@ -737,26 +741,49 @@ namespace KillerPDF
                 double x = e.GetPosition(TabStrip).X;
                 if (!_tabDragging && Math.Abs(x - _tabDragStart.X) < SystemParameters.MinimumHorizontalDragDistance) return;
                 _tabDragging = true;
+                // Keep the grabbed tab UNDER the active tab but OVER other inactive tabs, the same in both drag
+                // directions (raw child-index stacking would otherwise flip it front/back as it's reordered).
+                Panel.SetZIndex(bd, s == _active ? 3 : 1);
                 int curIdx = TabStrip.Children.IndexOf(bd);
                 if (curIdx < 0) return;
-                // Swap with whichever immediate neighbour the cursor has crossed the midpoint of. We move
-                // the NEIGHBOUR around bd (never bd itself) so bd stays in the tree and keeps mouse capture.
+                double slide = bd.ActualWidth + bd.Margin.Left + bd.Margin.Right;
+                double rawLeft = x - _tabGrabDX;                 // grabbed tab's content-left, following the cursor
+                // Detection uses the dragged tab's ADVANCING edge (unclamped), so even a wide tab reaches a narrow
+                // neighbour's slot at the edge. The RENDER position is clamped so it never visually leaves the strip.
+                double leftEdge  = rawLeft;                      // leading edge when dragging left
+                double rightEdge = rawLeft + bd.ActualWidth;     // leading edge when dragging right
+                double maxLeft = Math.Max(0, TabStrip.ActualWidth - slide);
+                double renderLeft = Math.Min(Math.Max(0, rawLeft), maxLeft);
+
+                // Swap when the ADVANCING edge crosses a neighbour's LAYOUT-slot midpoint: dragging right, the tab's
+                // RIGHT edge past the right neighbour's midpoint; dragging left, its LEFT edge past the left one's.
+                // Works for any width and the edge-vs-edge gap gives natural hysteresis (no bounce). Layout slots
+                // ignore any in-flight slide transform.
+                bool swapped = false;
                 if (curIdx + 1 < TabStrip.Children.Count && TabStrip.Children[curIdx + 1] is FrameworkElement right
-                    && x > right.TranslatePoint(new Point(right.ActualWidth / 2, 0), TabStrip).X)
+                    && rightEdge > LayoutMidX(right))
                 {
-                    var t = TabStrip.Children[curIdx + 1];
                     TabStrip.Children.RemoveAt(curIdx + 1);
-                    TabStrip.Children.Insert(curIdx, t);
+                    TabStrip.Children.Insert(curIdx, right);
                     ResyncSessionsFromTabStrip();
+                    AnimateTabSlide(right, slide);    // it jumped left over the dragged tab; glide it in from the right
+                    swapped = true;
                 }
                 else if (curIdx - 1 >= 0 && TabStrip.Children[curIdx - 1] is FrameworkElement left
-                    && x < left.TranslatePoint(new Point(left.ActualWidth / 2, 0), TabStrip).X)
+                    && leftEdge < LayoutMidX(left))
                 {
-                    var t = TabStrip.Children[curIdx - 1];
                     TabStrip.Children.RemoveAt(curIdx - 1);
-                    TabStrip.Children.Insert(curIdx, t);
+                    TabStrip.Children.Insert(curIdx, left);
                     ResyncSessionsFromTabStrip();
+                    AnimateTabSlide(left, -slide);    // it jumped right over the dragged tab; glide it in from the left
+                    swapped = true;
                 }
+
+                // Pin the grabbed tab at its clamped render position. After a swap its slot moves by a neighbour's
+                // width; refresh layout first so the new slot is current, then offset bd back to renderLeft.
+                if (swapped) TabStrip.UpdateLayout();
+                var bslot = System.Windows.Controls.Primitives.LayoutInformation.GetLayoutSlot(bd);
+                SetTabOffsetX(bd, renderLeft - (bslot.X + bd.Margin.Left));
             };
             bd.PreviewMouseLeftButtonUp += (_, _) =>
             {
@@ -765,7 +792,25 @@ namespace KillerPDF
                 bool wasDragging = _tabDragging;
                 _tabDragSession = null;
                 _tabDragging = false;
-                if (wasDragging) RebuildTabStrip();   // re-apply widths / overflow / active styling cleanly
+                if (wasDragging)
+                {
+                    // Settle the grabbed tab from its dragged offset into its final slot, then rebuild cleanly
+                    // (RebuildTabStrip re-applies widths / overflow / active styling and clears the transform).
+                    if (bd.RenderTransform is TranslateTransform stt && Math.Abs(stt.X) > 0.5)
+                    {
+                        var settle = new System.Windows.Media.Animation.DoubleAnimation(0,
+                            new Duration(TimeSpan.FromMilliseconds(120)))
+                        {
+                            EasingFunction = new System.Windows.Media.Animation.CubicEase
+                            {
+                                EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
+                            },
+                        };
+                        settle.Completed += (_, _) => RebuildTabStrip();
+                        stt.BeginAnimation(TranslateTransform.XProperty, settle);
+                    }
+                    else RebuildTabStrip();
+                }
                 else SwitchToTab(s);                  // it was a click, not a drag
             };
 
@@ -774,8 +819,51 @@ namespace KillerPDF
 
         // Live drag-reorder state.
         private Point _tabDragStart;
+        private double _tabGrabDX;          // cursor offset within the grabbed tab, to keep it under the grab point
         private DocumentSession? _tabDragSession;
         private bool _tabDragging;
+
+        // Set a tab's horizontal offset immediately (no animation) - used to glue the grabbed tab to the cursor.
+        private static void SetTabOffsetX(FrameworkElement tab, double x)
+        {
+            if (tab.RenderTransform is not TranslateTransform tt)
+            {
+                tt = new TranslateTransform();
+                tab.RenderTransform = tt;
+            }
+            tt.BeginAnimation(TranslateTransform.XProperty, null);   // drop any prior animation so the set sticks
+            tt.X = x;
+        }
+
+        // Midpoint X of a tab's LAYOUT slot in TabStrip coordinates (ignores any in-flight slide transform).
+        private static double LayoutMidX(FrameworkElement fe)
+        {
+            var slot = System.Windows.Controls.Primitives.LayoutInformation.GetLayoutSlot(fe);
+            return slot.X + slot.Width / 2;
+        }
+
+        // Slide a just-reordered tab from where it was into its new slot, so a swap reads as a smooth glide
+        // instead of an instant jump. Z-order is left to how the strip was built: the active tab stays raised
+        // and glides in front of its neighbours; an inactive dragged tab slides under them. A clean
+        // RebuildTabStrip on drop clears these transient transforms.
+        private static void AnimateTabSlide(FrameworkElement tab, double fromX)
+        {
+            if (tab.RenderTransform is not TranslateTransform tt)
+            {
+                tt = new TranslateTransform();
+                tab.RenderTransform = tt;
+            }
+            tt.BeginAnimation(TranslateTransform.XProperty, null);
+            var anim = new System.Windows.Media.Animation.DoubleAnimation(fromX, 0,
+                new Duration(TimeSpan.FromMilliseconds(140)))
+            {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase
+                {
+                    EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
+                },
+            };
+            tt.BeginAnimation(TranslateTransform.XProperty, anim);
+        }
 
         // Rebuild the session order from the tab strip's current visual order (each tab Border's Tag is its
         // session); sessions not currently shown (overflow) keep their order after the visible ones.
