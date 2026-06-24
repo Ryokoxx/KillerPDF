@@ -210,7 +210,10 @@ namespace KillerPDF
                 ClearSearchHighlights();
                 _allSearchRects.Clear();
                 _searchResultPages.Clear();
+                _searchMatches.Clear();
+                _searchMatchCursor = -1;
                 _searchPageCursor = -1;
+                if (_searchStatus is not null) _searchStatus.Text = "";
                 return;
             }
             // Debounce: wait for a brief pause in typing before searching, so the first keystrokes
@@ -232,11 +235,18 @@ namespace KillerPDF
 
         private readonly SearchService _searchService = new();
 
+        // Flat, reading-ordered list of every match (page + rect) so Enter steps word-by-word rather
+        // than page-by-page; _searchMatchCursor indexes it and that match is drawn with extra emphasis.
+        private readonly List<(int page, double left, double bottom, double right, double top)> _searchMatches = [];
+        private int _searchMatchCursor = -1;
+
         private void RunSearch(string query)
         {
             ClearSearchHighlights();
             _allSearchRects.Clear();
             _searchResultPages.Clear();
+            _searchMatches.Clear();
+            _searchMatchCursor = -1;
             _searchPageCursor = -1;
 
             if (string.IsNullOrWhiteSpace(query) || _currentFile is null)
@@ -253,24 +263,26 @@ namespace KillerPDF
                     _allSearchRects[kvp.Key] = kvp.Value;
                 _searchResultPages.AddRange(sr.ResultPages);
 
-                if (_searchResultPages.Count == 0)
+                // Flatten every match into one reading-ordered list (page asc, then top-to-bottom,
+                // then left-to-right) so navigation steps word-by-word across the whole document.
+                foreach (var page in _searchResultPages)
+                    foreach (var rc in _allSearchRects[page].OrderByDescending(r => r.top).ThenBy(r => r.left))
+                        _searchMatches.Add((page, rc.left, rc.bottom, rc.right, rc.top));
+
+                if (_searchMatches.Count == 0)
                 {
                     if (_searchStatus != null) _searchStatus.Text = "No matches";
                     return;
                 }
 
-                int startPage = PageList.SelectedIndex;
-                _searchPageCursor = _searchResultPages.FindIndex(p => p >= startPage);
-                if (_searchPageCursor < 0) _searchPageCursor = 0;
-
                 _searchTotalHits = sr.TotalHits;
-                UpdateSearchStatus();
 
-                int targetPage = _searchResultPages[_searchPageCursor];
-                if (PageList.SelectedIndex != targetPage)
-                    PageList.SelectedIndex = targetPage;
-                else
-                    HighlightSearchResultsOnCurrentPage();
+                // Start at the first match on or after the current page.
+                int startPage = PageList.SelectedIndex;
+                _searchMatchCursor = _searchMatches.FindIndex(m => m.page >= startPage);
+                if (_searchMatchCursor < 0) _searchMatchCursor = 0;
+
+                GoToCurrentMatch();
             }
             catch
             {
@@ -278,100 +290,141 @@ namespace KillerPDF
             }
         }
 
+        // Navigates to the current match's page (if needed), updates the counter, and repaints
+        // highlights with the current match emphasised. Shared by RunSearch and next/prev.
+        private void GoToCurrentMatch()
+        {
+            if (_searchMatchCursor < 0 || _searchMatchCursor >= _searchMatches.Count) return;
+            int targetPage = _searchMatches[_searchMatchCursor].page;
+            _searchPageCursor = _searchResultPages.IndexOf(targetPage);   // keep the persisted page-cursor sane
+            UpdateSearchStatus();
+            if (PageList.SelectedIndex != targetPage)
+                PageList.SelectedIndex = targetPage;
+            HighlightSearchResultsOnCurrentPage();
+        }
+
+        // Paints match highlights onto EVERY page that's currently on screen and has results -
+        // the primary tile and all per-page overlays alike. Single Page shows the one page; Two-Page
+        // and Grid show every visible tile with hits; Continuous shows them down the whole scroll.
+        // Re-paints one page's match highlights onto its overlay using the in-memory page size (no
+        // file I/O), so it's cheap enough to call at the tail of every RenderAllAnnotations - which is
+        // what keeps highlights alive instead of being wiped by re-renders and continuous scrolling.
+        private void ApplySearchHighlights(int page, Canvas canvas)
+        {
+            if (_searchBar is null || _searchBar.Visibility != Visibility.Visible) return;
+            if (_doc is null || page < 0 || page >= _doc.PageCount) return;
+            if (!_allSearchRects.TryGetValue(page, out var rects)) return;
+            if (!_renderDims.TryGetValue(page, out var rd)) return;
+
+            var (renderW, renderH) = rd;
+            double pdfW = _doc.Pages[page].Width.Point;
+            double pdfH = _doc.Pages[page].Height.Point;
+            if (pdfW <= 0 || pdfH <= 0) return;
+            double sx = renderW / pdfW;
+            double sy = renderH / pdfH;
+
+            bool hasCur = _searchMatchCursor >= 0 && _searchMatchCursor < _searchMatches.Count;
+            var cur = hasCur ? _searchMatches[_searchMatchCursor] : default;
+
+            foreach (var (left, bottom, right, top) in rects)
+            {
+                bool isCurrent = hasCur && cur.page == page
+                    && cur.left == left && cur.bottom == bottom && cur.right == right && cur.top == top;
+                AddSearchHighlight(canvas, left, bottom, right, top, sx, sy, renderH, isCurrent);
+            }
+        }
+
+        // Repaints highlights on every page on screen right now (called when a search runs or the
+        // current page changes); per-page re-renders keep them alive via ApplySearchHighlights.
         private void HighlightSearchResultsOnCurrentPage()
         {
             ClearSearchHighlights();
-            int curPage = PageList.SelectedIndex;
-            if (!_allSearchRects.ContainsKey(curPage)) return;
-            if (!_renderDims.ContainsKey(curPage)) return;
-
-            var (renderW, renderH) = _renderDims[curPage];
-
-            try
+            foreach (var kv in _allSearchRects)
             {
-                using var pigDoc = PdfPigDoc.Open(_currentFile!);
-                var page = pigDoc.GetPage(curPage + 1);
-                double pdfW = page.Width;
-                double pdfH = page.Height;
-                double sx = renderW / pdfW;
-                double sy = renderH / pdfH;
-
-                foreach (var (left, bottom, right, top) in _allSearchRects[curPage])
-                    AddSearchHighlight(left, bottom, right, top, sx, sy, renderH);
+                var canvas = VisibleCanvasForPage(kv.Key);
+                if (canvas is not null) ApplySearchHighlights(kv.Key, canvas);
             }
-            catch { }
         }
 
         private int _searchTotalHits;
 
-        // Compact VSCode-style count ("2 / 5"); full detail lives in the tooltip.
+        // Compact count ("12 / 73" = current match / total matches); page breakdown in the tooltip.
         private void UpdateSearchStatus()
         {
             if (_searchStatus is null) return;
-            if (_searchResultPages.Count == 0)
+            if (_searchMatches.Count == 0)
             {
                 _searchStatus.Text = "No matches";
                 _searchStatus.ToolTip = null;
                 return;
             }
-            _searchStatus.Text = $"{_searchPageCursor + 1} / {_searchResultPages.Count}";
-            _searchStatus.ToolTip = $"{_searchTotalHits} match{(_searchTotalHits != 1 ? "es" : "")} on {_searchResultPages.Count} page{(_searchResultPages.Count != 1 ? "s" : "")}";
+            int pages = _searchResultPages.Count;
+            _searchStatus.Text = $"{_searchMatchCursor + 1} / {_searchMatches.Count}";
+            _searchStatus.ToolTip = $"{_searchMatches.Count} match{(_searchMatches.Count != 1 ? "es" : "")} on {pages} page{(pages != 1 ? "s" : "")}";
         }
 
         private void SearchNextResult()
         {
-            if (_searchResultPages.Count == 0) return;
-            _searchPageCursor = (_searchPageCursor + 1) % _searchResultPages.Count;
-            UpdateSearchStatus();
-            int targetPage = _searchResultPages[_searchPageCursor];
-            if (PageList.SelectedIndex != targetPage)
-                PageList.SelectedIndex = targetPage;
-            else
-                HighlightSearchResultsOnCurrentPage();
+            if (_searchMatches.Count == 0) return;
+            _searchMatchCursor = (_searchMatchCursor + 1) % _searchMatches.Count;
+            GoToCurrentMatch();
         }
 
         private void SearchPrevResult()
         {
-            if (_searchResultPages.Count == 0) return;
-            _searchPageCursor = (_searchPageCursor - 1 + _searchResultPages.Count) % _searchResultPages.Count;
-            UpdateSearchStatus();
-            int targetPage = _searchResultPages[_searchPageCursor];
-            if (PageList.SelectedIndex != targetPage)
-                PageList.SelectedIndex = targetPage;
-            else
-                HighlightSearchResultsOnCurrentPage();
+            if (_searchMatches.Count == 0) return;
+            _searchMatchCursor = (_searchMatchCursor - 1 + _searchMatches.Count) % _searchMatches.Count;
+            GoToCurrentMatch();
         }
 
-        private void AddSearchHighlight(double left, double bottom, double right, double top,
-            double sx, double sy, double renderH)
+        private void AddSearchHighlight(Canvas canvas, double left, double bottom, double right, double top,
+            double sx, double sy, double renderH, bool isCurrent)
         {
-            double cx = left  * sx;
-            double cy = renderH - (top * sy);
             double cw = (right - left) * sx;
             double ch = (top - bottom) * sy;
+            // A little breathing room so the box (and the current-match outline) wraps the whole word -
+            // PdfPig's glyph bounds sit tight against the letters. Scales with text height so it looks
+            // consistent across font sizes.
+            double pad = ch * 0.30;
+            double cx = left * sx - pad;
+            double cy = renderH - (top * sy) - pad;
             var rect = new Rectangle
             {
-                Fill = new SolidColorBrush(Color.FromArgb(80, 255, 165, 0)),
-                Stroke = new SolidColorBrush(Color.FromArgb(160, 255, 165, 0)),
-                StrokeThickness = 1,
-                Width = Math.Max(cw, 4),
-                Height = Math.Max(ch, 4),
+                // The current match (search cursor) gets a brighter, more opaque fill; the others are dim.
+                Fill = new SolidColorBrush(isCurrent
+                    ? Color.FromArgb(150, 255, 190, 0)
+                    : Color.FromArgb(70, 255, 165, 0)),
+                StrokeThickness = isCurrent ? 3.5 : 1,
+                RadiusX = pad * 0.6,
+                RadiusY = pad * 0.6,
+                Width = Math.Max(cw + pad * 2, 4),
+                Height = Math.Max(ch + pad * 2, 4),
                 IsHitTestVisible = false,
                 Tag = "SearchHighlight"
             };
+            if (isCurrent)
+                // Bind the current-match outline to the on-page accent resource so it recolors live on a
+                // theme switch (matching the selection chrome), rather than baking the color in at paint time.
+                rect.SetResourceReference(Shape.StrokeProperty, "SelectionAccent");
+            else
+                rect.Stroke = new SolidColorBrush(Color.FromArgb(140, 255, 165, 0));
             Canvas.SetLeft(rect, cx);
             Canvas.SetTop(rect, cy);
-            _annotationCanvas.Children.Add(rect);
+            canvas.Children.Add(rect);
         }
 
+        // Removes only the highlight rectangles from every page overlay. Deliberately does NOT touch
+        // the result counter - that's owned by UpdateSearchStatus and the empty-query path - so a
+        // repaint (which clears then re-adds highlights) can't wipe the "3 / 14" count.
         private void ClearSearchHighlights()
         {
-            var toRemove = _annotationCanvas.Children.OfType<Rectangle>()
-                .Where(r => r.Tag is string s && s == "SearchHighlight").ToList();
-            foreach (var r in toRemove)
-                _annotationCanvas.Children.Remove(r);
-            if (_searchStatus is not null)
-                _searchStatus.Text = "";
+            foreach (var canvas in AllPageCanvases())
+            {
+                var toRemove = canvas.Children.OfType<Rectangle>()
+                    .Where(r => r.Tag is string s && s == "SearchHighlight").ToList();
+                foreach (var r in toRemove)
+                    canvas.Children.Remove(r);
+            }
         }
     }
 }

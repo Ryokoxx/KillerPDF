@@ -239,6 +239,11 @@ namespace KillerPDF
         private int _gesturePage = -1;
         // Per-page overlay canvases for Continuous view, keyed by page index.
         private readonly Dictionary<int, Canvas> _continuousCanvases = [];
+        // Unified page -> overlay map covering EVERY rendered page, the primary included (unlike
+        // _continuousCanvases, which holds only secondary tiles and is driven by the tile-recycling
+        // machinery). This is the single source of truth the canvas accessors read from, so the
+        // primary stops being a special case in routing/search/links.
+        private readonly Dictionary<int, Canvas> _pages = [];
         private readonly Grid _pageContentGrid = null!;
         private readonly Button _toolSelectBtn = null!;
         private readonly Button _toolTextBtn = null!;

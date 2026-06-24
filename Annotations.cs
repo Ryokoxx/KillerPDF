@@ -81,8 +81,7 @@ namespace KillerPDF
             // Resolve this page's annotation surface from the unified per-page overlay map, which
             // every multi-page view populates; fall back to the single-page canvas. View-mode
             // independent on purpose so the tools behave identically in all four modes.
-            _activeCanvas = _continuousCanvases.TryGetValue(pageIndex, out var pageCanvas)
-                ? pageCanvas : _annotationCanvas;
+            _activeCanvas = CanvasForPage(pageIndex);
             _activeCanvas.Children.Clear();
 
             if (_annotations.TryGetValue(pageIndex, out var annotList))
@@ -203,6 +202,10 @@ namespace KillerPDF
             // Re-add form field overlays - RenderAllAnnotations clears the canvas so they must be restored.
             if (_renderDims.TryGetValue(pageIndex, out var dims))
                 RenderFormFields(pageIndex, dims.w, dims.h);
+
+            // Search highlights live on this same canvas and were wiped by the clear above; repaint
+            // them last so they sit on top and survive every re-render and continuous scroll.
+            ApplySearchHighlights(pageIndex, _activeCanvas);
         }
 
         // Decode a placed annotation's Base64 image once and cache the frozen result on the annotation,
@@ -273,9 +276,24 @@ namespace KillerPDF
             _selectedSet.Clear();
         }
 
-        /// <summary>The overlay canvas that hosts a given page's annotations.</summary>
+        /// <summary>The overlay canvas that hosts a given page's annotations. Reads the unified page
+        /// map (primary included); falls back to the primary canvas only for a page with no tile.</summary>
         private Canvas CanvasForPage(int pageIndex)
-            => _continuousCanvases.TryGetValue(pageIndex, out var c) ? c : _annotationCanvas;
+            => _pages.TryGetValue(pageIndex, out var c) ? c : _annotationCanvas;
+
+        /// <summary>The overlay for a page that is actually on screen right now, or null when the page
+        /// has no live tile (so callers don't paint a page's content onto the wrong canvas). The
+        /// unified map includes the primary, so there's no primary special case here anymore.</summary>
+        private Canvas? VisibleCanvasForPage(int pageIndex)
+            => _pages.TryGetValue(pageIndex, out var c) ? c : null;
+
+        /// <summary>Every page overlay currently in the visual tree (primary + per-page tiles).</summary>
+        private IEnumerable<Canvas> AllPageCanvases()
+        {
+            yield return _annotationCanvas;
+            foreach (var c in _pages.Values)
+                if (!ReferenceEquals(c, _annotationCanvas)) yield return c;
+        }
 
         /// <summary>Total annotations currently selected (primary + shift-selected set).</summary>
         private int SelectionCount()

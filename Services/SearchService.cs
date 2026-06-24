@@ -47,6 +47,11 @@ namespace KillerPDF.Services
             var result = new List<(double, double, double, double)>();
             var words = page.GetWords().ToList();
 
+            // A multi-word phrase can span adjacent words; a single token never does, so for single-token
+            // queries we only do the per-word substring match (the cross-word union box below would
+            // otherwise highlight whole runs of words leading up to the matching one).
+            bool isPhrase = query.Trim().IndexOf(' ') >= 0;
+
             for (int i = 0; i < words.Count; i++)
             {
                 if (words[i].Text.IndexOf(query, System.StringComparison.OrdinalIgnoreCase) >= 0)
@@ -55,6 +60,8 @@ namespace KillerPDF.Services
                     result.Add((bb.Left, bb.Bottom, bb.Right, bb.Top));
                     continue;
                 }
+
+                if (!isPhrase) continue;
 
                 // Multi-word match
                 string combined = words[i].Text;

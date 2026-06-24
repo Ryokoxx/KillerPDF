@@ -50,7 +50,7 @@ namespace KillerPDF
             // Render onto the page's OWN surface: the per-page overlay used by continuous / grid /
             // two-page views, or the single-page canvas otherwise. Previously this always used the
             // single-page canvas, so interactive fields only appeared in Single Page view.
-            var canvas = _continuousCanvases.TryGetValue(pageIndex, out var pageCanvas) ? pageCanvas : _annotationCanvas;
+            var canvas = CanvasForPage(pageIndex);
 
             // Remove stale overlays without wiping the entire canvas.
             for (int i = canvas.Children.Count - 1; i >= 0; i--)

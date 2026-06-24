@@ -78,6 +78,7 @@ namespace KillerPDF
             _continuousPanel.Children.Clear();
             _continuousTops.Clear();
             _continuousCanvases.Clear();
+            _pages.Clear();
 
             // Use the PDF's natural page width in WPF DIPs (96 DIP/inch, 72 pt/inch).
             // This is zoom-independent, which is critical: FitToWidth computes
@@ -136,6 +137,7 @@ namespace KillerPDF
                     }
                 };
                 _continuousCanvases[i] = overlay;
+                _pages[i] = overlay;
 
                 var pageImg = new Image { Stretch = Stretch.None, Width = _continuousPageW, Height = slotH };
                 RenderOptions.SetBitmapScalingMode(pageImg, BitmapScalingMode.HighQuality);
@@ -349,6 +351,7 @@ namespace KillerPDF
                                                         // are unhittable and clicks "do nothing".
                 ClearSelection();
                 ClearSecondaryPages();
+                _pages[pageIndex] = _annotationCanvas;   // the primary is a normal entry in the unified map
                 RenderAllAnnotations(pageIndex);
                 SetStatus(string.Format(Loc("Str_PageOf"), pageIndex + 1, _doc!.PageCount));
                 // Defer additional pages until layout has settled so ActualWidth is valid.
@@ -388,6 +391,7 @@ namespace KillerPDF
                     _pageContentPanel.Children.Remove(tile);
                 }
                 _continuousCanvases.Remove(pg);
+                _pages.Remove(pg);
             }
         }
 
@@ -415,6 +419,11 @@ namespace KillerPDF
                 _annotationCanvas.Children.Remove(lo);
             _linkOverlays.Clear();
             _continuousCanvases.Clear();   // keep the page->tile map in sync with the visible tiles
+            // Unified map: keep only the CURRENT primary entry (key == _annotationCanvas.Tag) and drop
+            // everything else - the secondary overlays and any stale primary entry from a prior page.
+            int primPage = _annotationCanvas.Tag is int tp ? tp : -1;
+            foreach (var pg in _pages.Keys.Where(k => k != primPage).ToList())
+                _pages.Remove(pg);
         }
 
         /// <summary>
@@ -603,6 +612,7 @@ namespace KillerPDF
                 }
             };
             _continuousCanvases[pi] = overlay;
+            _pages[pi] = overlay;
 
             var pageGrid = new Grid();
             pageGrid.Children.Add(img);
@@ -1141,6 +1151,7 @@ namespace KillerPDF
                 _continuousPanel.Children.Clear();
                 _continuousTops.Clear();
                 _continuousCanvases.Clear();
+                _pages.Clear();
             }
 
             if (_doc is null) return;
