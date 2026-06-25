@@ -1681,6 +1681,8 @@
                                             HorizontalAlignment="Center"
                                             Orientation="Vertical"
                                             Visibility="Collapsed"/>
+                                <!-- Top-most layer for the selection marquee, so a drag can span pages -->
+                                <Canvas x:Name="MarqueeLayer" IsHitTestVisible="False"/>
                             </Grid>
                         </Border>
                     </ScrollViewer>
@@ -2332,9 +2334,13 @@
                 <StackPanel>
                     <Grid Margin="0,0,0,12">
                         <TextBlock Text="{DynamicResource Str_KS_Title}"
-                                   FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="15" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextPrimary}"
-                                   HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                   FontFamily="Consolas" FontSize="16" FontWeight="Bold"
+                                   Foreground="{DynamicResource HeaderAccent}"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center">
+                            <TextBlock.Effect>
+                                <DropShadowEffect Color="Black" BlurRadius="3" ShadowDepth="1" Direction="270" Opacity="0.55"/>
+                            </TextBlock.Effect>
+                        </TextBlock>
                         <Button Click="ShortcutOverlayClose_Click"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Width="24" Height="24" Content="&#xE711;"
@@ -2403,10 +2409,10 @@
                             <DockPanel Margin="0,0,0,4"><TextBlock Text="F8" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_View_Grid}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
                             <DockPanel Margin="0,0,0,0"><TextBlock Text="F11 / Esc" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_FullScreen}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
 
-                            <TextBlock Text="{DynamicResource Str_KS_Help}" Foreground="{DynamicResource Accent}"
+                            <TextBlock Text="{DynamicResource Str_KS_Ocr}" Foreground="{DynamicResource Accent}"
                                        FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold" Margin="0,12,0,4"/>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="F1 / Ctrl+?" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_ThisList}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
-                            <DockPanel Margin="0,0,0,4"><TextBlock Text="F2" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_About}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="Ctrl+Shift+O" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Ctx_OcrPage}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="Ctrl+Shift+I" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_Ocr_Region}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
 
                             <TextBlock Text="{DynamicResource Str_KS_SearchSelect}" Foreground="{DynamicResource Accent}"
                                        FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold" Margin="0,12,0,4"/>
@@ -2414,6 +2420,11 @@
                             <DockPanel Margin="0,0,0,4"><TextBlock Text="Enter / Shift+Enter" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_NextPrevResult}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
                             <DockPanel Margin="0,0,0,4"><TextBlock Text="Ctrl+A" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_SelectAll}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
                             <DockPanel Margin="0,0,0,0"><TextBlock Text="Shift+Click" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_MultiSelect}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+
+                            <TextBlock Text="{DynamicResource Str_KS_Help}" Foreground="{DynamicResource Accent}"
+                                       FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" FontWeight="SemiBold" Margin="0,12,0,4"/>
+                            <DockPanel Margin="0,0,0,4"><TextBlock Text="F1 / Ctrl+?" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_ThisList}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
+                            <DockPanel Margin="0,0,0,0"><TextBlock Text="F2" FontFamily="Consolas" FontSize="11" Foreground="{DynamicResource TextSecondary}" Width="120"/><TextBlock Text="{DynamicResource Str_KS_About}" FontSize="{DynamicResource Str_KS_FontSize}" Foreground="{DynamicResource TextPrimary}"/></DockPanel>
                         </StackPanel>
                     </Grid>
                 </StackPanel>

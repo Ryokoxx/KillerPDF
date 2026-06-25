@@ -736,6 +736,27 @@ namespace KillerPDF
             return b;
         }
 
+        // Draws the selection marquee on the top-most MarqueeLayer (above every page) so a drag can span
+        // pages. Maps the two corners from the start page's canvas into the layer's coordinate space.
+        private void UpdateMarquee(Point startInStartCanvas, Point currentInStartCanvas)
+        {
+            var gc = _gestureCanvas ?? _activeCanvas;
+            if (_selectRect is null || gc is null) return;
+            var t = gc.TransformToVisual(MarqueeLayer);
+            Point a = t.Transform(startInStartCanvas), b = t.Transform(currentInStartCanvas);
+            Canvas.SetLeft(_selectRect, Math.Min(a.X, b.X));
+            Canvas.SetTop(_selectRect, Math.Min(a.Y, b.Y));
+            _selectRect.Width = Math.Abs(a.X - b.X);
+            _selectRect.Height = Math.Abs(a.Y - b.Y);
+        }
+
+        // Maps a rectangle from one visual's coordinate space into another's, for cross-page hit-testing.
+        private static Rect MapRect(UIElement from, System.Windows.Media.Visual to, Rect r)
+        {
+            var t = from.TransformToVisual(to);
+            return new Rect(t.Transform(new Point(r.Left, r.Top)), t.Transform(new Point(r.Right, r.Bottom)));
+        }
+
         // Constrains a rectangle (annotation-canvas coordinates) to the page so its corners can't land
         // off the page, where resize handles become unreachable. The page occupies (0,0)-(w,h) in the
         // same coordinate space as annotations, taken from _renderDims. A box bigger than the page is
@@ -1026,6 +1047,7 @@ namespace KillerPDF
                             // non-draggable annotation is added on mouse-up); only a plain click clears.
                             if (!shiftSel) ClearSelection();
                             ClearTextSelection();
+                            if (_viewMode == ViewMode.Grid && !shiftSel) PageList.SelectedIndex = pageIdx;  // grid: click selects the page
                             _isSelecting = true;
                             _selectStart = pos;
                             _selectRect = new Rectangle
@@ -1036,9 +1058,8 @@ namespace KillerPDF
                                 Width = 0, Height = 0,
                                 IsHitTestVisible = false
                             };
-                            Canvas.SetLeft(_selectRect, pos.X);
-                            Canvas.SetTop(_selectRect, pos.Y);
-                            _activeCanvas.Children.Add(_selectRect);
+                            MarqueeLayer.Children.Add(_selectRect);
+                            UpdateMarquee(pos, pos);
                             _activeCanvas.CaptureMouse();
                             e.Handled = true;
                         }
@@ -1444,10 +1465,9 @@ namespace KillerPDF
             // Text selection drag
             if (_isSelecting && _selectRect is not null)
             {
-                Canvas.SetLeft(_selectRect, Math.Min(pos.X, _selectStart.X));
-                Canvas.SetTop(_selectRect, Math.Min(pos.Y, _selectStart.Y));
-                _selectRect.Width = Math.Abs(pos.X - _selectStart.X);
-                _selectRect.Height = Math.Abs(pos.Y - _selectStart.Y);
+                // Raw (un-clamped) pointer so the marquee can extend past the start page onto the others;
+                // pos above is clamped to the page, which is right for dragging annotations but not for this.
+                UpdateMarquee(_selectStart, e.GetPosition(gc));
                 return;
             }
 
@@ -1676,7 +1696,8 @@ namespace KillerPDF
             if (_isSelecting)
             {
                 _isSelecting = false;
-                _activeCanvas?.ReleaseMouseCapture();
+                var gc = _gestureCanvas ?? _activeCanvas;   // the canvas the marquee was drawn against
+                gc?.ReleaseMouseCapture();
                 // Drop the shaded marquee rectangle now that the drag is over - the selection it made is
                 // kept, but the box itself shouldn't linger on the page.
                 if (_selectRect is not null)
@@ -1684,9 +1705,18 @@ namespace KillerPDF
                     (_selectRect.Parent as Canvas)?.Children.Remove(_selectRect);
                     _selectRect = null;
                 }
-                var pos = e.GetPosition(_activeCanvas);
+                var pos = e.GetPosition(gc);
                 double dragW = Math.Abs(pos.X - _selectStart.X);
                 double dragH = Math.Abs(pos.Y - _selectStart.Y);
+
+                if (_ocrRegionMode)
+                {
+                    _ocrRegionMode = false;
+                    if (dragW >= 4 && dragH >= 4)
+                        OcrRegion(pageIdx, new Rect(Math.Min(pos.X, _selectStart.X), Math.Min(pos.Y, _selectStart.Y), dragW, dragH));
+                    else SetStatus("OCR region cancelled");
+                    return;
+                }
 
                 if (dragW < 5 && dragH < 5)
                 {
@@ -1712,30 +1742,34 @@ namespace KillerPDF
                 }
                 else
                 {
-                    var selectBounds = new Rect(
+                    var startRect = new Rect(
                         Math.Min(pos.X, _selectStart.X), Math.Min(pos.Y, _selectStart.Y),
                         dragW, dragH);
-                    // Box-select: if any annotations fall inside the rectangle, multi-select them all (so
-                    // stacked annotations become individually visible and editable). Only when none are
-                    // caught do we fall back to selecting page text in the region (copy/extract).
-                    var hits = new List<(PageAnnotation a, Rect b)>();
-                    if (pageIdx >= 0 && _annotations.TryGetValue(pageIdx, out var apg))
+                    // Box-select across EVERY visible page: map the marquee (in the start page's coords) into
+                    // each page's own coords and collect the annotations it covers. Falls back to region text
+                    // extraction on the start page only when nothing is caught anywhere.
+                    var hits = new List<(PageAnnotation a, Rect b, Canvas cv)>();
+                    foreach (int p in new List<int>(_pages.Keys))
+                    {
+                        if (!_annotations.TryGetValue(p, out var apg) || apg.Count == 0) continue;
+                        var pc = _pages[p];
+                        Rect inP = MapRect(gc, pc, startRect);
                         foreach (var a in apg)
                         {
                             if (!IsDraggable(a)) continue;
                             var ab = AnnotBounds(a);
-                            if (!ab.IsEmpty && selectBounds.IntersectsWith(ab)) hits.Add((a, ab));
+                            if (!ab.IsEmpty && inP.IntersectsWith(ab)) hits.Add((a, ab, pc));
                         }
+                    }
                     if (hits.Count > 0)
                     {
                         ClearSelection();
-                        var cv = _gestureCanvas ?? CanvasForPage(pageIdx);
-                        foreach (var (a, b) in hits) ToggleMultiSelect(a, b, cv);
+                        foreach (var (a, b, cv) in hits) ToggleMultiSelect(a, b, cv);
                         SetStatus($"Selected {hits.Count} annotation{(hits.Count == 1 ? "" : "s")}");
                     }
                     else
                     {
-                        ExtractTextFromRegion(pageIdx, selectBounds);
+                        ExtractTextFromRegion(pageIdx, startRect);
                     }
                 }
                 return;

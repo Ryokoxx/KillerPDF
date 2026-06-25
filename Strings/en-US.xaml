@@ -89,6 +89,7 @@
     <sys:String x:Key="Str_KS_DeleteAnnot">Delete selected annotation</sys:String>
     <sys:String x:Key="Str_KS_ConfirmCancel">Confirm / cancel text or crop</sys:String>
     <sys:String x:Key="Str_KS_SearchSelect">SEARCH &amp; SELECT</sys:String>
+    <sys:String x:Key="Str_KS_Ocr">OCR</sys:String>
     <sys:String x:Key="Str_KS_Find">Find / search</sys:String>
     <sys:String x:Key="Str_KS_NextPrevResult">Next / previous result</sys:String>
     <sys:String x:Key="Str_KS_SelectAll">Select all text on page</sys:String>

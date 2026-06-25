@@ -173,6 +173,16 @@ namespace KillerPDF
                 Open_Click(this, e);
                 e.Handled = true;
             }
+            else if (e.Key == Key.O && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+            {
+                OcrPageToClipboard(PageList.SelectedIndex);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.I && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+            {
+                BeginOcrRegion();
+                e.Handled = true;
+            }
             else if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 NewDocument();

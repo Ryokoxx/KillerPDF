@@ -21,10 +21,8 @@ using PdfPigDoc = UglyToad.PdfPig.PdfDocument;
 
 namespace KillerPDF
 {
-    // Document viewport - first extraction slice out of the MainWindow monolith. Holds the continuous
-    // view renderer and the preview scroll handler. This is a behavior-preserving MOVE (same partial
-    // class, identical code); the logic is unchanged. Later slices bring the single/two-page/grid
-    // render path here too, after which the four view modes can be unified onto one model.
+    // Page viewport: builds the page tiles and annotation overlays for all four view modes (single,
+    // continuous, two-page, grid) and handles preview scrolling.
     public partial class MainWindow
     {
         private void ScrollContinuousToPage(int pageIndex)
@@ -97,6 +95,24 @@ namespace KillerPDF
             _pages[page] = overlay;
         }
 
+        // Builds a page's annotation overlay. Size/transform differ by mode (continuous = render-dim + scale;
+        // grid/two-page = DIP 1:1); everything else - background, clip, tag, input handler - is identical.
+        private Canvas BuildPageOverlay(int page, double width, double height, System.Windows.Media.Transform? layoutTransform)
+        {
+            var overlay = new Canvas
+            {
+                Width = width,
+                Height = height,
+                Background = Brushes.Transparent,
+                ClipToBounds = true,
+                Tag = page
+            };
+            if (layoutTransform != null) overlay.LayoutTransform = layoutTransform;
+            overlay.PreviewMouseLeftButtonDown += Canvas_MouseLeftButtonDown;
+            WirePageOverlay(overlay, page);
+            return overlay;
+        }
+
         // Build tile-0 (the primary page) in code and insert it at the head of the page panel, replacing the
         // former hardcoded XAML PageImage + AnnotationCanvas singleton. Wiring mirrors the old XAML attributes
         // exactly: left-down/move/leave/left-up, plus the attached ContextMenu set later in BuildContextMenu.
@@ -166,19 +182,8 @@ namespace KillerPDF
                 int rdH = Math.Max(1, (int)Math.Round(2048.0 * ph / maxDim));
                 _renderDims[i] = (rdW, rdH);
 
-                // Per-page annotation overlay: sized in render-dim space, scaled to the slot.
                 double slotScale = _continuousPageW / rdW;
-                var overlay = new Canvas
-                {
-                    Width           = rdW,
-                    Height          = rdH,
-                    Background       = Brushes.Transparent,
-                    ClipToBounds     = true,
-                    Tag              = i,
-                    LayoutTransform  = new System.Windows.Media.ScaleTransform(slotScale, slotScale)
-                };
-                overlay.PreviewMouseLeftButtonDown += Canvas_MouseLeftButtonDown;
-                WirePageOverlay(overlay, i);
+                var overlay = BuildPageOverlay(i, rdW, rdH, new System.Windows.Media.ScaleTransform(slotScale, slotScale));
 
                 var pageImg = new Image { Stretch = Stretch.None, Width = _continuousPageW, Height = slotH };
                 RenderOptions.SetBitmapScalingMode(pageImg, BitmapScalingMode.HighQuality);
@@ -614,36 +619,9 @@ namespace KillerPDF
             var img = new Image { Source = bitmap, Stretch = Stretch.None };
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
 
-            var overlay = new Canvas
-            {
-                Width = pageDipW, Height = pageDipH,
-                Background = Brushes.Transparent,
-                Cursor = CursorForTool(_currentTool),
-                Tag = pi,
-                ToolTip = $"Page {pi + 1}"
-            };
-            int capturedPi = pi;
-            overlay.PreviewMouseLeftButtonDown += (s, ev) =>
-            {
-                if (_currentTool == EditTool.Select)
-                {
-                    var hit = ev.GetPosition((Canvas)s);
-                    bool onAnnot = (_annotations.TryGetValue(capturedPi, out var list)
-                                    && list.Any(a => HitTestAnnotation(a, hit, out _)))
-                                   || _selectedAnnotation?.PageIndex == capturedPi;
-                    // Forward to the canvas handler when the click is on an annotation, OR on any
-                    // double-click: double-click starts text editing on raw PDF text, which is not an
-                    // annotation yet, so it must reach Canvas_MouseLeftButtonDown (EditTextAtPosition)
-                    // even on an "empty" tile. Without the ClickCount check, editing fresh text was
-                    // impossible on secondary tiles (all grid pages, the 2nd two-page page).
-                    if (onAnnot || ev.ClickCount == 2) Canvas_MouseLeftButtonDown(s, ev);
-                    // Selecting the page reflows the Two-Page pair (looks like the doc "advances"),
-                    // so don't change the selection on an empty click of a secondary tile there.
-                    else if (_viewMode != ViewMode.TwoPage) PageList.SelectedIndex = capturedPi;
-                }
-                else Canvas_MouseLeftButtonDown(s, ev);
-            };
-            WirePageOverlay(overlay, pi);
+            var overlay = BuildPageOverlay(pi, pageDipW, pageDipH, null);
+            overlay.Cursor = CursorForTool(_currentTool);
+            overlay.ToolTip = $"Page {pi + 1}";
 
             var pageGrid = new Grid();
             pageGrid.Children.Add(img);

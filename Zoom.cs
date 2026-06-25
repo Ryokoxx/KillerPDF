@@ -97,38 +97,12 @@ namespace KillerPDF
                 PagePreviewPanel.Cursor = Cursors.SizeAll;
                 e.Handled = true;
             }
-            // Crop: allow starting the selection OUTSIDE the page. On-page clicks are handled by
-            // the page overlay; here we catch clicks in the margins, route them to the nearest page
-            // overlay, and clamp the start point to the page edge so the rect stays on the page.
+            // Crop: allow starting the selection OUTSIDE the page - catch margin clicks, route them to the
+            // nearest page overlay, and clamp the start to the page edge so the crop rect stays on the page.
             else if (e.ChangedButton == MouseButton.Left && !spaceDown
                      && _currentTool == EditTool.Crop && _doc is not null)
             {
-                // Resolve the page surface for an off-page crop start in any view mode. On-page
-                // clicks are left to the page canvas/overlay; we only handle margin clicks here.
-                Canvas? target = null;
-                if (_viewMode == ViewMode.Continuous)
-                {
-                    if (!(e.OriginalSource is DependencyObject osc && IsWithinPageOverlay(osc)))
-                    {
-                        // Prefer the page centered in the viewport (kept in sync by scrolling) - it's
-                        // the page the user is looking at. Fall back to the nearest page by click Y.
-                        int pg = PageList.SelectedIndex;
-                        if (pg < 0 || !_continuousCanvases.ContainsKey(pg))
-                            pg = NearestContinuousPage(e.GetPosition(_continuousPanel).Y);
-                        if (pg >= 0) _continuousCanvases.TryGetValue(pg, out target);
-                    }
-                }
-                else
-                {
-                    // Single / Two-Page / Grid. An on-page click is handled by that page's own
-                    // surface: the primary page uses _annotationCanvas, secondary/grid tiles use
-                    // their per-page overlay. Only a genuine margin click (on neither) is routed
-                    // here, and we fall back to the primary page for it.
-                    bool onPrimary = e.OriginalSource is DependencyObject oss && IsDescendantOf(oss, _annotationCanvas);
-                    bool onTile = e.OriginalSource is DependencyObject ost && IsWithinPageOverlay(ost);
-                    if (!onPrimary && !onTile)
-                        target = _annotationCanvas;
-                }
+                Canvas? target = ResolveMarginOverlay(e);
                 if (target is not null && target.Width > 0 && target.Height > 0)
                 {
                     _activeCanvas = target;
@@ -143,6 +117,59 @@ namespace KillerPDF
                     e.Handled = true;
                 }
             }
+            // Marquee select: start a selection rectangle in the margin so it can span onto the pages. Same
+            // routing as crop, but the start point is NOT clamped, so the box can begin off-page.
+            else if (e.ChangedButton == MouseButton.Left && !spaceDown
+                     && _currentTool == EditTool.Select && _doc is not null)
+            {
+                Canvas? target = ResolveMarginOverlay(e);
+                if (target is not null && target.Width > 0 && target.Height > 0)
+                {
+                    StartMarqueeDraw(target, e.GetPosition(target));
+                    e.Handled = true;
+                }
+            }
+        }
+
+        // Resolves which page overlay a margin (off-page) click attaches to, or null when the click is
+        // actually on a page (left to that page's own surface). Shared by off-page crop and marquee starts.
+        private Canvas? ResolveMarginOverlay(MouseButtonEventArgs e)
+        {
+            if (_viewMode == ViewMode.Continuous)
+            {
+                if (e.OriginalSource is DependencyObject osc && IsWithinPageOverlay(osc)) return null;
+                int pg = PageList.SelectedIndex;
+                if (pg < 0 || !_continuousCanvases.ContainsKey(pg))
+                    pg = NearestContinuousPage(e.GetPosition(_continuousPanel).Y);
+                return pg >= 0 && _continuousCanvases.TryGetValue(pg, out var c) ? c : null;
+            }
+            bool onPrimary = e.OriginalSource is DependencyObject oss && IsDescendantOf(oss, _annotationCanvas);
+            bool onTile = e.OriginalSource is DependencyObject ost && IsWithinPageOverlay(ost);
+            return (!onPrimary && !onTile) ? _annotationCanvas : null;
+        }
+
+        // Begins a marquee anchored to refCanvas at posInRef (that page's coords, possibly off-page and
+        // un-clamped). The box draws on the cross-page MarqueeLayer; the existing move/up handlers finish it.
+        private void StartMarqueeDraw(Canvas refCanvas, Point posInRef)
+        {
+            _activeCanvas = refCanvas;
+            _gestureCanvas = refCanvas;
+            _gesturePage = refCanvas.Tag is int gt ? gt : PageList.SelectedIndex;
+            ClearSelection();
+            ClearTextSelection();
+            _isSelecting = true;
+            _selectStart = posInRef;
+            _selectRect = new Rectangle
+            {
+                Fill = AccentBrush(40),
+                Stroke = AccentBrush(150),
+                StrokeThickness = 1,
+                Width = 0, Height = 0,
+                IsHitTestVisible = false
+            };
+            MarqueeLayer.Children.Add(_selectRect);
+            UpdateMarquee(posInRef, posInRef);
+            refCanvas.CaptureMouse();
         }
 
         // Begin a crop selection on the active overlay at pos (render-dim coords).

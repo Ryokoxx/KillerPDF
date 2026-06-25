@@ -476,6 +476,86 @@ namespace KillerPDF
             }
         }
 
+        // OCR Region: armed by the menu item; the next box-drag (Select tool) crops that area of the page
+        // bitmap and OCRs only it to the clipboard. Works on scans that have no text layer to extract from.
+        private bool _ocrRegionMode;
+
+        private void BeginOcrRegion()
+        {
+            if (_doc is null || _currentFile is null) { KillerDialog.Show(this, "Open a PDF first."); return; }
+            SetTool(EditTool.Select);
+            _ocrRegionMode = true;
+            SetStatus("Drag a box over the area to recognize");
+        }
+
+        private async void OcrRegion(int pageIdx, Rect canvasBounds)
+        {
+            if (_doc is null || _currentFile is null) return;
+            if (pageIdx < 0 || pageIdx >= _doc.PageCount) return;
+            if (!_renderDims.TryGetValue(pageIdx, out var rd) || rd.w <= 0 || rd.h <= 0) return;
+            if (canvasBounds.Width < 4 || canvasBounds.Height < 4) { SetStatus("OCR region too small"); return; }
+            if (!await EnsureOcrModelsReadyAsync()) return;
+
+            string file = _currentFile;
+            int rot = _pageRotations.TryGetValue(pageIdx, out var r) ? r : 0;
+            string lang = CurrentOcrLanguageString();
+            int renderW = rd.w, renderH = rd.h;
+            Rect cb = canvasBounds;
+
+            var ct = BeginCancellableOp("OCR region");
+            var busy = ShowBusyOverlay("Recognizing region...");
+            try
+            {
+                OcrResult result = await Task.Run(() =>
+                {
+                    using var docReader = DocLib.Instance.GetDocReader(file, new PageDimensions(OcrRenderMax, OcrRenderMax));
+                    using var pageReader = docReader.GetPageReader(pageIdx);
+                    int w = pageReader.GetPageWidth();
+                    int h = pageReader.GetPageHeight();
+                    byte[] bgra = pageReader.GetImage();
+                    if (rot != 0) (bgra, w, h) = RotateBitmap(bgra, w, h, rot);
+
+                    double sx = (double)w / renderW, sy = (double)h / renderH;
+                    byte[] crop = CropBgra(bgra, w, h,
+                        (int)Math.Round(cb.Left * sx), (int)Math.Round(cb.Top * sy),
+                        (int)Math.Round(cb.Width * sx), (int)Math.Round(cb.Height * sy),
+                        out int cw, out int chh);
+
+                    using var ocr = new OcrService(language: lang);
+                    return ocr.RecognizeBgra(crop, cw, chh);
+                });
+
+                HideBusyOverlay(busy);
+                if (ct.IsCancellationRequested) { SetStatus("OCR cancelled"); return; }
+
+                string text = result.Text.Trim();
+                if (text.Length == 0) { SetStatus("OCR: no text found in the selected region"); return; }
+                Clipboard.SetText(text);
+                SetStatus($"OCR: copied {text.Length} chars from the region ({result.MeanConfidence:P0} confidence)");
+            }
+            catch (Exception ex)
+            {
+                HideBusyOverlay(busy);
+                KillerDialog.Show(this, $"OCR failed:\n{ex.Message}", "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                EndCancellableOp();
+            }
+        }
+
+        private static byte[] CropBgra(byte[] src, int srcW, int srcH, int x, int y, int cw, int ch, out int outW, out int outH)
+        {
+            x = Math.Max(0, Math.Min(x, srcW - 1));
+            y = Math.Max(0, Math.Min(y, srcH - 1));
+            outW = Math.Max(1, Math.Min(cw, srcW - x));
+            outH = Math.Max(1, Math.Min(ch, srcH - y));
+            var dst = new byte[outW * outH * 4];
+            for (int row = 0; row < outH; row++)
+                Array.Copy(src, ((y + row) * srcW + x) * 4, dst, row * outW * 4, outW * 4);
+            return dst;
+        }
+
         // Primary OCR toolbar button: the common quick action, OCR the current page to the clipboard.
         private void Ocr_Click(object sender, RoutedEventArgs e) => OcrPageToClipboard(PageList.SelectedIndex);
 
@@ -492,7 +572,7 @@ namespace KillerPDF
             {
                 int pageIdx = PageList.SelectedIndex;
                 menu.Items.Add(MakeMenuItem(Loc("Str_Ctx_OcrPage"), (_, _) => OcrPageToClipboard(pageIdx)));
-                menu.Items.Add(MakeMenuItem(Loc("Str_Ocr_Region"), (_, _) => OcrComingSoon(Loc("Str_Ocr_Region"))));
+                menu.Items.Add(MakeMenuItem(Loc("Str_Ocr_Region"), (_, _) => BeginOcrRegion()));
                 menu.Items.Add(new Separator());
                 menu.Items.Add(MakeMenuItem(Loc("Str_Ocr_SearchablePdf"), (_, _) => MakeSearchablePdf()));
                 menu.Items.Add(MakeMenuItem(Loc("Str_Ocr_ExtractText"), (_, _) => ExtractAllText()));
