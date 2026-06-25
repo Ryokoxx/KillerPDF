@@ -224,6 +224,24 @@
     <sys:String x:Key="Str_Stamp_Hint">{}{n} = 頁碼，{N} = 總頁數。例如「Page {n} of {N}」</sys:String>
     <sys:String x:Key="Str_Stamp_Position">位置</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">字型大小 (pt)</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">範例：&quot;第 {n} 頁，共 {N} 頁&quot;</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">蓋章頁面</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">頁碼</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">浮水印</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">顏色</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">頁面</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">文字</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">圖片</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">浮水印文字</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">選擇圖片...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">縮放</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">角度</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">不透明度</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">在對開頁上鏡射（外側邊緣）</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">已蓋章 {0} 頁</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">自訂（在預覽上拖曳）</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">蓋章頁面</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">蓋章頁面</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">取消</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">套用</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">底部置中</sys:String>

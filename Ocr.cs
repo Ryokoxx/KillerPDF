@@ -65,9 +65,10 @@ namespace KillerPDF
             ("chi_tra", "Chinese (Traditional)"),
         ];
 
-        // True if <code>.traineddata exists in the tessdata folder (English is always available - bundled).
+        // True if <code>.traineddata exists in the tessdata folder. Nothing is bundled now (not even English);
+        // models are downloaded on demand, so this is a pure file-presence check.
         private static bool IsLanguageInstalled(string code) =>
-            code == "eng" || File.Exists(Path.Combine(OcrNativeBootstrap.TessDataDir, code + ".traineddata"));
+            File.Exists(Path.Combine(OcrNativeBootstrap.TessDataDir, code + ".traineddata"));
 
         // The user's chosen OCR languages, persisted as a '+'-joined setting. Filtered to those actually
         // installed (a deleted pack can't be passed to Tesseract) and never empty - English is the floor.
@@ -94,9 +95,12 @@ namespace KillerPDF
         private void SetOcrHighQuality(bool on) => App.SetSetting("OcrHighQuality", on ? "1" : "0");
 
         // Download URL for a language's traineddata, honoring the HQ preference.
+        // Standard tier uses tessdata_fast: the same integer LSTM model as the full "tessdata" repo but without
+        // the unused legacy-engine data, so it is ~4MB instead of ~22MB with identical LSTM accuracy. HQ uses
+        // tessdata_best (float LSTM): larger (~14MB) but the most accurate.
         private string LanguageDataUrl(string code) => OcrHighQuality
             ? $"https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/{code}.traineddata"
-            : $"https://raw.githubusercontent.com/tesseract-ocr/tessdata/main/{code}.traineddata";
+            : $"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/{code}.traineddata";
 
         private static string NameForCode(string code)
         {
@@ -149,7 +153,7 @@ namespace KillerPDF
 
             foreach (var (code, name) in OcrLanguageCatalog)
             {
-                bool installed = code == "eng" || File.Exists(Path.Combine(tessDir, code + ".traineddata"));
+                bool installed = File.Exists(Path.Combine(tessDir, code + ".traineddata"));
                 if (installed)
                 {
                     var item = new MenuItem
@@ -248,16 +252,22 @@ namespace KillerPDF
         // working one (temp+move).
         private async void RedownloadSelectedHighQuality()
         {
-            // Only fetch selected languages that aren't already the high-quality model, so re-checking the
-            // toggle (or checking it when everything is already HQ) doesn't download anything needlessly.
+            // Only UPGRADE languages that are actually installed and not already HQ. A language the user has
+            // selected but hasn't downloaded yet (e.g. the default English right after clearing data) must NOT
+            // be auto-downloaded here - that would surprise the user with no prompt. It is fetched on the first
+            // OCR instead, via EnsureOcrModelsReadyAsync, which shows the heads-up dialog and honors this HQ pref.
             var hq = GetHqLanguages();
             var toDownload = new List<string>();
             foreach (var c in GetSelectedOcrLanguages())
-                if (!hq.Contains(c)) toDownload.Add(c);
+                if (IsLanguageInstalled(c) && !hq.Contains(c)) toDownload.Add(c);
 
             if (toDownload.Count == 0)
             {
-                SetStatus("All selected languages are already high quality");
+                bool anyInstalled = false;
+                foreach (var c in GetSelectedOcrLanguages()) if (IsLanguageInstalled(c)) { anyInstalled = true; break; }
+                SetStatus(anyInstalled
+                    ? "All selected languages are already high quality"
+                    : "High quality models will be used the next time you run OCR");
                 return;
             }
 
@@ -346,6 +356,65 @@ namespace KillerPDF
             try { if (File.Exists(path)) File.Delete(path); } catch { /* best-effort cleanup */ }
         }
 
+        // Ensures the language models OCR is about to use are present on disk. Nothing is bundled, so on the
+        // first OCR (or after the user adds a new language) the model is downloaded here, behind a heads-up
+        // dialog. Returns true only when every required model is installed and OCR may proceed.
+        private async Task<bool> EnsureOcrModelsReadyAsync()
+        {
+            // Desired languages from the persisted setting (default English), regardless of install state.
+            var desired = new List<string>(
+                (App.GetSetting("OcrLanguages") ?? "eng").Split(['+'], StringSplitOptions.RemoveEmptyEntries));
+            if (desired.Count == 0) desired.Add("eng");
+
+            var missing = new List<string>();
+            foreach (var c in desired) if (!IsLanguageInstalled(c) && !missing.Contains(c)) missing.Add(c);
+            if (missing.Count == 0) return true;
+
+            string names = string.Join(", ", missing.ConvertAll(NameForCode));
+            var choice = KillerDialog.Show(this,
+                $"A language model ({names}) will be downloaded now so OCR can run.\n\n" +
+                "You can add more languages or switch to higher quality models any time from the OCR menu.",
+                "KillerPDF", MessageBoxButton.OKCancel, MessageBoxImage.Information);
+            if (choice != MessageBoxResult.OK) return false;
+
+            var ct = BeginCancellableOp("language download");
+            var busy = ShowBusyOverlay("Downloading language model...");
+            try
+            {
+                string tessDir = OcrNativeBootstrap.EnsureLanguageData();
+                using var http = MakeDownloadClient();
+                for (int i = 0; i < missing.Count; i++)
+                {
+                    string code = missing[i];
+                    string name = NameForCode(code);
+                    string dest = Path.Combine(tessDir, code + ".traineddata");
+                    await DownloadTrainedDataAsync(http, LanguageDataUrl(code), dest,
+                        missing.Count == 1 ? $"Downloading {name}..." : $"Downloading {name} - {i + 1} of {missing.Count} -",
+                        busy, ct);
+                    MarkLanguageHq(code, OcrHighQuality);
+                    if (ct.IsCancellationRequested) return false;
+                }
+                foreach (var c in missing) if (!IsLanguageInstalled(c)) return false;
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                SetStatus("Language download cancelled");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                KillerDialog.Show(this, $"Could not download the language model:\n{ex.Message}",
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+            finally
+            {
+                HideBusyOverlay(busy);
+                EndCancellableOp();
+            }
+        }
+
         // Right-click "OCR Page" action: rasterize the page, recognize text off the UI thread, and drop
         // the result on the clipboard. Render + OCR are both slow, so they run inside Task.Run behind the
         // busy overlay; everything touching the clipboard/UI happens back on the UI thread.
@@ -353,6 +422,7 @@ namespace KillerPDF
         {
             if (_doc is null || _currentFile is null) { KillerDialog.Show(this, "Open a PDF first."); return; }
             if (pageIdx < 0 || pageIdx >= _doc.PageCount) return;
+            if (!await EnsureOcrModelsReadyAsync()) return;
 
             // Capture everything off the live UI state before going async.
             string file = _currentFile;
@@ -446,6 +516,7 @@ namespace KillerPDF
         private async void MakeSearchablePdf()
         {
             if (_doc is null || _currentFile is null) { KillerDialog.Show(this, Loc("Str_Ocr_NoDoc")); return; }
+            if (!await EnsureOcrModelsReadyAsync()) return;
             CommitActiveTextBox();
 
             var dlg = new SaveFileDialog
@@ -576,6 +647,7 @@ namespace KillerPDF
         private async void ExtractAllText()
         {
             if (_doc is null || _currentFile is null) { KillerDialog.Show(this, Loc("Str_Ocr_NoDoc")); return; }
+            if (!await EnsureOcrModelsReadyAsync()) return;
             CommitActiveTextBox();
 
             var dlg = new SaveFileDialog

@@ -94,7 +94,9 @@ namespace KillerPDF
                 ApplyTextStyleToActiveBox();
                 return;
             }
-            if (_selectedAnnotation is TextAnnotation ta)
+            // Apply to the primary selection AND every shift-selected text annotation (these can span pages).
+            var touched = new HashSet<int>();
+            void Apply(TextAnnotation ta)
             {
                 ta.SetColor(_textColor);
                 ta.SetFill(_textFillColor);
@@ -107,8 +109,19 @@ namespace KillerPDF
                 if (_doc is not null && _renderDims.TryGetValue(ta.PageIndex, out var rd) && rd.h > 0)
                     sy = _doc.Pages[ta.PageIndex].Height.Point / rd.h;
                 if (sy > 0 && _textFontSize > 0) ta.FontSize = _textFontSize / sy;
-                MarkDirty();
-                RenderAllAnnotations(ta.PageIndex);
+                touched.Add(ta.PageIndex);
+            }
+            if (_selectedAnnotation is TextAnnotation primary) Apply(primary);
+            foreach (var a in _selectedSet)
+                if (a is TextAnnotation ta && !ReferenceEquals(ta, _selectedAnnotation)) Apply(ta);
+            if (touched.Count == 0) return;
+
+            MarkDirty();
+            int primPage = (_selectedAnnotation as TextAnnotation)?.PageIndex ?? -1;
+            foreach (int p in touched) if (p != primPage) RenderAllAnnotations(p);
+            if (primPage >= 0)
+            {
+                RenderAllAnnotations(primPage);   // render primary's page last so its chrome lands on _activeCanvas
                 if (_selectionBorder is not null) _activeCanvas.Children.Add(_selectionBorder);
                 foreach (var hd in _resizeHandles) _activeCanvas.Children.Add(hd);
             }
@@ -119,19 +132,33 @@ namespace KillerPDF
         // onto it and repaint - so editing an existing annotation works the same as setting up a new one.
         private void ApplyDrawStyleToSelection()
         {
-            if (_selectedAnnotation is HighlightAnnotation ha)
+            // Apply to the primary selection AND every shift-selected highlight / line / ink annotation.
+            var touched = new HashSet<int>();
+            void Apply(PageAnnotation a)
             {
-                ha.SetColor(ha.Style == HighlightStyle.Fill ? _highlightColor : _lineAnnotColor);
-                MarkDirty();
-                RenderAllAnnotations(ha.PageIndex);
-                ReattachSelectionVisuals();
+                if (a is HighlightAnnotation ha)
+                {
+                    ha.SetColor(ha.Style == HighlightStyle.Fill ? _highlightColor : _lineAnnotColor);
+                    touched.Add(ha.PageIndex);
+                }
+                else if (a is InkAnnotation ia)
+                {
+                    ia.SetColor(_drawColor);
+                    ia.StrokeWidth = _drawWidth;
+                    touched.Add(ia.PageIndex);
+                }
             }
-            else if (_selectedAnnotation is InkAnnotation ia)
+            if (_selectedAnnotation is not null) Apply(_selectedAnnotation);
+            foreach (var a in _selectedSet)
+                if (!ReferenceEquals(a, _selectedAnnotation)) Apply(a);
+            if (touched.Count == 0) return;
+
+            MarkDirty();
+            int primPage = _selectedAnnotation?.PageIndex ?? -1;
+            foreach (int p in touched) if (p != primPage) RenderAllAnnotations(p);
+            if (primPage >= 0)
             {
-                ia.SetColor(_drawColor);
-                ia.StrokeWidth = _drawWidth;
-                MarkDirty();
-                RenderAllAnnotations(ia.PageIndex);
+                RenderAllAnnotations(primPage);
                 ReattachSelectionVisuals();
             }
         }

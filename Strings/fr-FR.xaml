@@ -253,6 +253,24 @@ Vous pourrez désinstaller le programme à tout moment via « Ajouter ou supprim
     <sys:String x:Key="Str_Stamp_Hint">{}{n} = numéro de page, {N} = total. ex. « Page {n} sur {N} »</sys:String>
     <sys:String x:Key="Str_Stamp_Position">Position</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">Taille de police (pt)</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">Exemple : &quot;Page {n} sur {N}&quot;</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">Tamponner les pages</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">Numéros de page</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">Filigrane</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">Couleur</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">Pages</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">Texte</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">Image</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">Texte du filigrane</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">Choisir une image...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">Échelle</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">Angle</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">Opacité</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">Refléter sur les pages en vis-à-vis (bord extérieur)</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">{0} page(s) tamponnée(s)</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">Personnalisé (glisser sur l'aperçu)</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">Tamponner les pages</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">Tamponner les pages</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">Annuler</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">Numéroter</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">Bas centre</sys:String>

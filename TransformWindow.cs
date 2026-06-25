@@ -82,6 +82,7 @@ namespace KillerPDF
             AllowsTransparency = true;
             Background = Brushes.Transparent;
             ResizeMode = ResizeMode.CanResize;
+            WindowFx.EnableFadeClose(this);
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.Grayscale);
 

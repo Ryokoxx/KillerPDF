@@ -65,13 +65,12 @@
     <Resource Include="Resources\kp-icon.png" />
   </ItemGroup>
 
-  <!-- OCR: embed the native Tesseract libs (x64) and the language data so the app still ships as a single exe.
-       OcrNativeBootstrap extracts them to a per-version cache under %LOCALAPPDATA% on first use, the same
-       self-extract pattern Costura uses for the managed assemblies. PkgTesseract comes from GeneratePathProperty. -->
+  <!-- OCR: embed only the native Tesseract libs (x64) so the app still ships as a single exe. Language data
+       is NOT bundled - it is downloaded on demand on first OCR (see EnsureOcrModelsReadyAsync), which keeps
+       the exe small. OcrNativeBootstrap extracts the natives to a per-version cache under %LOCALAPPDATA% on
+       first use, the same self-extract pattern Costura uses for the managed assemblies. PkgTesseract comes
+       from GeneratePathProperty. -->
   <ItemGroup>
-    <EmbeddedResource Include="tessdata\**\*.traineddata">
-      <LogicalName>KillerPDF.OcrTessData.%(Filename)%(Extension)</LogicalName>
-    </EmbeddedResource>
     <EmbeddedResource Include="$(PkgTesseract)\x64\tesseract50.dll" Condition="'$(PkgTesseract)' != ''">
       <LogicalName>KillerPDF.OcrNative.tesseract50.dll</LogicalName>
     </EmbeddedResource>

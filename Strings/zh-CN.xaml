@@ -222,6 +222,24 @@
     <sys:String x:Key="Str_Stamp_Hint">{}{n} = 页码，{N} = 总页数。例如「Page {n} of {N}」</sys:String>
     <sys:String x:Key="Str_Stamp_Position">位置</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">字体大小 (pt)</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">示例：&quot;第 {n} 页，共 {N} 页&quot;</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">盖章页面</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">页码</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">水印</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">颜色</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">页面</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">文本</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">图片</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">水印文本</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">选择图片...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">缩放</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">角度</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">不透明度</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">在对开页上镜像（外侧边缘）</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">已盖章 {0} 页</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">自定义（在预览上拖动）</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">盖章页面</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">盖章页面</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">取消</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">套用</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">底部置中</sys:String>

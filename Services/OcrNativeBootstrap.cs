@@ -51,7 +51,7 @@ namespace KillerPDF.Services
                 {
                     if (res.StartsWith(TessDataPrefix, StringComparison.Ordinal))
                     {
-                        string file = res.Substring(TessDataPrefix.Length);
+                        string file = res[TessDataPrefix.Length..];
                         ExtractResource(asm, res, Path.Combine(TessDataDir, file), onlyIfMissing: true);
                     }
                 }
@@ -85,7 +85,7 @@ namespace KillerPDF.Services
                 {
                     if (res.StartsWith(NativePrefix, StringComparison.Ordinal))
                     {
-                        string file = res.Substring(NativePrefix.Length);
+                        string file = res[NativePrefix.Length..];
                         // Tesseract's loader looks in the x64 subfolder; the flat copy covers any loader
                         // path that does not append the platform name.
                         ExtractResource(asm, res, Path.Combine(nativeDir, file), onlyIfMissing: false);

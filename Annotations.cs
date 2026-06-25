@@ -111,6 +111,8 @@ namespace KillerPDF
             _activeCanvas = CanvasForPage(pageIndex);
             _activeCanvas.Children.Clear();
 
+            RenderStamps(pageIndex);   // stamp layer (page numbers / watermark) sits beneath annotations
+
             if (_annotations.TryGetValue(pageIndex, out var annotList))
             foreach (var annot in annotList)
             {
@@ -963,6 +965,8 @@ namespace KillerPDF
                 case EditTool.Select:
                     if (e.ClickCount == 2)
                     {
+                        // Double-clicking a stamp (page number / watermark) reopens the Stamp Pages editor.
+                        if (StampHitTest(pageIdx, pos)) { OpenStampTool(); e.Handled = true; return; }
                         ClearSelection();
                         ClearTextSelection();
                         EditTextAtPosition(pos, pageIdx);
@@ -1989,8 +1993,8 @@ namespace KillerPDF
         // Returns false when there are no annotations to select (caller falls back to text select).
         private bool SelectAllAnnotations()
         {
-            List<int> pages = _continuousCanvases.Count > 0
-                ? [.. _continuousCanvases.Keys]
+            List<int> pages = _pages.Count > 0
+                ? [.. _pages.Keys]
                 : [PageList.SelectedIndex];
             ClearSelection();
             int n = 0;
@@ -2308,7 +2312,7 @@ namespace KillerPDF
                         list.RemoveAt(list.Count - 1);
                 ClearSelection();
                 foreach (int p in entry.Pages)
-                    if (_continuousCanvases.ContainsKey(p) || p == PageList.SelectedIndex)
+                    if (_pages.ContainsKey(p))   // authoritative map: covers the primary tile in Grid/Two-Page too
                         RenderAllAnnotations(p);
                 MarkDirty(entry.WasDirty);
                 SetStatus("Removed stamped page numbers");

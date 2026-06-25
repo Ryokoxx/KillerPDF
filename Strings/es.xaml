@@ -222,6 +222,24 @@ Puede desinstalarla en cualquier momento desde Agregar o quitar programas.</sys:
     <sys:String x:Key="Str_Stamp_Hint">{}{n} = número de página, {N} = total. ej. "Página {n} de {N}"</sys:String>
     <sys:String x:Key="Str_Stamp_Position">Posición</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">Tamaño de fuente (pt)</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">Ejemplo: &quot;Página {n} de {N}&quot;</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">Sellar páginas</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">Números de página</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">Marca de agua</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">Color</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">Páginas</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">Texto</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">Imagen</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">Texto de marca de agua</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">Elegir imagen...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">Escala</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">Ángulo</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">Opacidad</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">Reflejar en páginas enfrentadas (borde exterior)</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">{0} página(s) selladas</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">Personalizada (arrastrar en la vista previa)</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">Sellar páginas</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">Sellar páginas</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">Cancelar</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">Aplicar</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">Abajo centro</sys:String>

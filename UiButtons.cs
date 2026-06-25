@@ -61,7 +61,7 @@ namespace KillerPDF
         // handlers' color swaps show), with a centred content presenter.
         private static ControlTemplate Template()
         {
-            var bf = new FrameworkElementFactory(typeof(Border));
+            var bf = new FrameworkElementFactory(typeof(Border)) { Name = "bd" };
             bf.SetBinding(Border.BackgroundProperty,
                 new Binding("Background") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
             bf.SetBinding(Border.BorderBrushProperty,
@@ -76,7 +76,12 @@ namespace KillerPDF
             cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
             bf.AppendChild(cp);
-            return new ControlTemplate(typeof(Button)) { VisualTree = bf };
+            var ct = new ControlTemplate(typeof(Button)) { VisualTree = bf };
+            // Disabled buttons dim so they read as inactive (the template has no default disabled state).
+            var dis = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            dis.Setters.Add(new Setter(UIElement.OpacityProperty, 0.45) { TargetName = "bd" });
+            ct.Triggers.Add(dis);
+            return ct;
         }
     }
 }

@@ -232,11 +232,28 @@ You can uninstall via Add/Remove Programs at any time.</sys:String>
     <sys:String x:Key="Str_Stamp_Title">Stamp Page Numbers</sys:String>
     <sys:String x:Key="Str_Stamp_StartAt">Start at</sys:String>
     <sys:String x:Key="Str_Stamp_Format">Format</sys:String>
-    <sys:String x:Key="Str_Stamp_Hint">{}{n} = page number, {N} = total. e.g. "Page {n} of {N}"</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint">Use {n} for the page number, {N} for the total</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">Example: "Page {n} of {N}"</sys:String>
     <sys:String x:Key="Str_Stamp_Position">Position</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">Font size (pt)</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">Cancel</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">Stamp</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">Stamp Pages</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">Page Numbers</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">Watermark</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">Color</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">Pages</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">Text</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">Image</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">Watermark text</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">Choose image...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">Scale</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">Angle</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">Opacity</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">Mirror on facing pages (outer edge)</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">Stamped {0} page(s)</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">Stamp Pages</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">Stamp Pages</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">Bottom Center</sys:String>
     <sys:String x:Key="Str_Pos_BottomRight">Bottom Right</sys:String>
     <sys:String x:Key="Str_Pos_BottomLeft">Bottom Left</sys:String>
@@ -269,6 +286,7 @@ You can uninstall via Add/Remove Programs at any time.</sys:String>
     <sys:String x:Key="Str_Print_Color">Color</sys:String>
     <sys:String x:Key="Str_Print_BW">Black &amp; white</sys:String>
     <sys:String x:Key="Str_Pos_Center">Center</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">Custom (drag on preview)</sys:String>
     <sys:String x:Key="Str_Pos_Top">Top</sys:String>
     <sys:String x:Key="Str_Pos_Bottom">Bottom</sys:String>
     <sys:String x:Key="Str_Pos_Left">Left</sys:String>

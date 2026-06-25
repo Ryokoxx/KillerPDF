@@ -24,8 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 - Digital signatures with a cloud certificate (Certum SimplySign): reusable signatures and initials, and click-to-sign form fields.
 - Movable Signatures popup, its position remembered.
 - Toolbar style picker: small or large icons, text beside, under, or only.
-- Sidebar on the left or right, with the collapse toggle, splitter, and Settings flyout mirroring to match.
-- Resizable sidebar: drag the splitter to scale the page list and thumbnails; drag to open or close, or toggle with Ctrl+B.
+- Sidebar is resizable and can be placed either left or right, with the collapse toggle, splitter, and Settings flyout mirroring to match.
 - Accent colors (red, orange, green, teal, blue, purple) for the Dark, Light, and Black themes, each remembered independently.
 - Keyboard shortcuts for tools, views, and panels (F1 shortcuts list, F2 About, Ctrl+V paste, Esc to close, f5-f8 view modes, f11 fullscreen...); the overlay lists them all.
 - Bengali, Turkish, Simplified Chinese, German, and French translations (contributors akib-h #79, mrantikadev #76, KaneLeung #82, Dtrieb & Gevlug #93, Thalis-fr #95).
@@ -50,10 +49,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 - Opening an encrypted PDF or repairing a damaged one runs on a background thread instead of freezing the window.
 - Printing and Save Flattened no longer crash on documents PdfSharpCore can't reopen; they use the same repair fallback as Save.
 - A manually-closed PDF no longer reopens on next launch (Issue #75).
-- The vertical scrollbar is grabbable again at the window edge.
 - Search waits for a pause in typing before running; the Outlines panel scrolls and no longer auto-expands every branch.
 - Pressing Esc during a long OCR, repair, or flatten operation asks whether to cancel instead of closing the window.
-- Print Preview shows the rendering progress ("Rendering X / Y") on its own line above the page counter, and the preview window stays responsive while pages stream in.
 
 ## [1.5.1] - 2026-06-14
 

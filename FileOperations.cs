@@ -1250,6 +1250,7 @@ namespace KillerPDF
                     // from the clean copy so future saves don't double-burn.
                     var tempClean = App.MakeTempFile("clean");
                     _doc.Save(tempClean);
+                    DrawStampsOnDocument();
                     DrawAnnotationsOnDocument();
                     _doc.Save(saveTarget);
                     _doc.Close();
@@ -1321,6 +1322,7 @@ namespace KillerPDF
                 {
                     var tempClean = App.MakeTempFile("clean");
                     _doc.Save(tempClean);
+                    DrawStampsOnDocument();
                     DrawAnnotationsOnDocument();
                     _doc.Save(dlg.FileName);
                     _doc.Close();
@@ -1375,6 +1377,7 @@ namespace KillerPDF
                 var tempClean  = App.MakeTempFile("clean");
                 var tempBurned = App.MakeTempFile("burned");
                 _doc.Save(tempClean);
+                DrawStampsOnDocument();
                 DrawAnnotationsOnDocument();
                 _doc.Save(tempBurned);
                 _doc.Close();
@@ -1572,13 +1575,14 @@ namespace KillerPDF
             bool hasAnnotations = _annotations.Values.Any(list => list.Count > 0);
             string printPath;
             string? tempFlattened = null;
-            if (hasAnnotations)
+            if (hasAnnotations || _docStampSpec is not null)
             {
                 var tempClean = App.MakeTempFile("clean");
                 _doc.Save(tempClean);   // UI-thread snapshot of the current doc (just serialization)
                 // Snapshot the data the burn needs so the background thread reads no live UI state.
                 var annotsSnap = _annotations.ToDictionary(kv => kv.Key, kv => new List<PageAnnotation>(kv.Value));
                 var dimsSnap   = new Dictionary<int, (int w, int h)>(_renderDims);
+                var stampSnap  = _docStampSpec?.Clone();
                 var burnPath   = App.MakeTempFile("print");
 
                 // Flatten the annotations onto a throwaway COPY on a background thread. The live _doc is never
@@ -1601,6 +1605,7 @@ namespace KillerPDF
                         }
                         using (burnDoc)
                         {
+                            DrawStampsIntoDoc(burnDoc, stampSnap);   // stamps sit beneath annotations
                             DrawAnnotationsIntoDoc(burnDoc, annotsSnap, dimsSnap);
                             burnDoc.Save(burnPath);
                         }

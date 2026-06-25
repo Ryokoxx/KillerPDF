@@ -222,6 +222,24 @@ Sie können das Programm jederzeit über „Programme hinzufügen oder entfernen
     <sys:String x:Key="Str_Stamp_Hint">{}{n} = Seitenzahl, {N} = Gesamt. z. B. „Seite {n} von {N}“</sys:String>
     <sys:String x:Key="Str_Stamp_Position">Position</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">Schriftgröße (pt)</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">Beispiel: &quot;Seite {n} von {N}&quot;</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">Seiten stempeln</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">Seitenzahlen</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">Wasserzeichen</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">Farbe</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">Seiten</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">Text</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">Bild</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">Wasserzeichentext</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">Bild auswählen...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">Skalierung</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">Winkel</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">Deckkraft</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">Auf gegenüberliegenden Seiten spiegeln (Außenrand)</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">{0} Seite(n) gestempelt</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">Benutzerdefiniert (in der Vorschau ziehen)</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">Seiten stempeln</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">Seiten stempeln</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">Abbrechen</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">Einfügen</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">Unten Mitte</sys:String>

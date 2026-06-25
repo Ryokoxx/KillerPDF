@@ -222,6 +222,24 @@ Bu işlem uygulamayı %LocalAppData%\KillerPDF konumuna kopyalar ve bir Başlat 
     <sys:String x:Key="Str_Stamp_Hint">{}{n} = sayfa numarası, {N} = toplam. örn. "Sayfa {n} / {N}"</sys:String>
     <sys:String x:Key="Str_Stamp_Position">Konum</sys:String>
     <sys:String x:Key="Str_Stamp_FontSize">Yazı boyutu (pt)</sys:String>
+    <sys:String x:Key="Str_Stamp_Hint2">Örnek: &quot;Sayfa {n} / {N}&quot;</sys:String>
+    <sys:String x:Key="Str_Stamp_Suffix">Sayfaları Damgala</sys:String>
+    <sys:String x:Key="Str_Stamp_SecNumbers">Sayfa Numaraları</sys:String>
+    <sys:String x:Key="Str_Stamp_SecWatermark">Filigran</sys:String>
+    <sys:String x:Key="Str_Stamp_Color">Renk</sys:String>
+    <sys:String x:Key="Str_Stamp_Pages">Sayfalar</sys:String>
+    <sys:String x:Key="Str_Stamp_WmText">Metin</sys:String>
+    <sys:String x:Key="Str_Stamp_WmImage">Görüntü</sys:String>
+    <sys:String x:Key="Str_Stamp_WmTextLabel">Filigran metni</sys:String>
+    <sys:String x:Key="Str_Stamp_ChooseImage">Görüntü seç...</sys:String>
+    <sys:String x:Key="Str_Stamp_Scale">Ölçek</sys:String>
+    <sys:String x:Key="Str_Stamp_Angle">Açı</sys:String>
+    <sys:String x:Key="Str_Stamp_Opacity">Saydamlık</sys:String>
+    <sys:String x:Key="Str_Stamp_Mirror">Karşılıklı sayfalarda yansıt (dış kenar)</sys:String>
+    <sys:String x:Key="Str_Stamp_Applied">{0} sayfa damgalandı</sys:String>
+    <sys:String x:Key="Str_Pos_Custom">Özel (önizlemede sürükle)</sys:String>
+    <sys:String x:Key="Str_TT_StampTool">Sayfaları Damgala</sys:String>
+    <sys:String x:Key="Str_Ctx_StampPages">Sayfaları Damgala</sys:String>
     <sys:String x:Key="Str_Stamp_Cancel">İptal</sys:String>
     <sys:String x:Key="Str_Stamp_Stamp">Bas</sys:String>
     <sys:String x:Key="Str_Pos_BottomCenter">Alt Orta</sys:String>

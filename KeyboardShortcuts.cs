@@ -63,13 +63,6 @@ namespace KillerPDF
                 ToggleSearchBar();
                 e.Handled = true;
             }
-            // TEMPORARY: Ctrl+Shift+F12 signs the currently-open PDF with the Desktop test cert.
-            // Remove before release (see Services/Signing/SigningSmokeTest.cs).
-            else if (e.Key == Key.F12 && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
-            {
-                Services.Signing.SigningSmokeTest.RunOnFile(_currentFile);
-                e.Handled = true;
-            }
             else if (e.Key == Key.Enter && _currentTool == EditTool.Crop && _cropConfirmBar is not null)
             {
                 ApplyCrop([PageList.SelectedIndex]);
@@ -275,7 +268,8 @@ namespace KillerPDF
                 case Key.I: case Key.D6: case Key.NumPad6: SetTool(EditTool.Image); return true;
                 case Key.G: case Key.D7: case Key.NumPad7: ToolSignature_Click(this, new RoutedEventArgs()); return true;
                 case Key.C: case Key.D8: case Key.NumPad8: SetTool(EditTool.Crop); return true;
-                case Key.D9: case Key.NumPad9: ToolRotate_Click(this, new RoutedEventArgs()); return true;
+                case Key.R: case Key.D9: case Key.NumPad9: ToolRotate_Click(this, new RoutedEventArgs()); return true;
+                case Key.K: case Key.D0: case Key.NumPad0: ToolStamp_Click(this, new RoutedEventArgs()); return true;
                 default: return false;
             }
         }

@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
@@ -18,9 +19,9 @@ namespace KillerPDF
         public static FontFamily UiFont   => Res("UiFont",   _uiFallback);
         public static FontFamily MonoFont => Res("MonoFont", _monoFallback);
         public static FontFamily IconFont => Res("IconFont", _iconFallback);
-        private static readonly FontFamily _uiFallback   = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
-        private static readonly FontFamily _monoFallback = new FontFamily("Consolas");
-        private static readonly FontFamily _iconFallback = new FontFamily("Segoe MDL2 Assets");
+        private static readonly FontFamily _uiFallback   = new("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+        private static readonly FontFamily _monoFallback = new("Consolas");
+        private static readonly FontFamily _iconFallback = new("Segoe MDL2 Assets");
 
         public static CornerRadius RadControl => Rad("RadControl", 3);
         public static CornerRadius RadCard    => Rad("RadCard", 6);
@@ -41,7 +42,7 @@ namespace KillerPDF
         private static CornerRadius Rad(string key, double fb)
             => Application.Current?.TryFindResource(key) is CornerRadius c ? c : new CornerRadius(fb);
         private static DropShadowEffect Shadow(double blur, double depth, double opacity)
-            => new DropShadowEffect { Color = Colors.Black, BlurRadius = blur, ShadowDepth = depth, Direction = 270, Opacity = opacity };
+            => new() { Color = Colors.Black, BlurRadius = blur, ShadowDepth = depth, Direction = 270, Opacity = opacity };
 
         // The default quick-color palette, shared by the annotate bars and the color picker's swatch row
         // (the "UserSwatches" setting seeds from this). One source so the two can't drift.
@@ -56,7 +57,7 @@ namespace KillerPDF
 
         // Themed checkbox: rounded box with an accent check mark when checked. Replaces the per-dialog
         // StyleCheckBox/ThemedCheckTemplate copies so every checkbox in the app is identical.
-        public static CheckBox CheckBox(string label) => new CheckBox
+        public static CheckBox CheckBox(string label) => new()
         {
             Content                  = label,
             Foreground               = Brush("TextPrimary"),
@@ -69,7 +70,7 @@ namespace KillerPDF
 
         private static ControlTemplate CheckTemplate()
         {
-            var row = new FrameworkElementFactory(typeof(StackPanel));
+            var row = new FrameworkElementFactory(typeof(StackPanel)) { Name = "root" };
             row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
 
             var box = new FrameworkElementFactory(typeof(Border));
@@ -103,21 +104,107 @@ namespace KillerPDF
             var trig = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
             trig.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible) { TargetName = "chk" });
             ct.Triggers.Add(trig);
+            // Disabled state: dim the whole control (box + label) so it's obviously inactive.
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4) { TargetName = "root" });
+            ct.Triggers.Add(disabled);
             return ct;
         }
 
-        // Themed single-line input. Reuses the XAML FormFieldTextBox style (themed selection/caret) so
-        // code-built dialogs match the chrome defined in MainWindow.xaml.
+        // Themed radio button with a clean horizontal layout (ring + accent dot + label), built from the
+        // theme brushes. Unlike the settings-panel ThemeRadio (a full-width vertical row), this lays out
+        // tightly for inline/horizontal use.
+        public static RadioButton Radio(string text) => new()
+        {
+            Content                  = text,
+            Foreground               = Brush("TextPrimary"),
+            FontFamily               = UiFont,
+            FontSize                 = 12,
+            Cursor                   = Cursors.Hand,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Template                 = RadioTemplate()
+        };
+
+        private static ControlTemplate RadioTemplate()
+        {
+            var sp = new FrameworkElementFactory(typeof(StackPanel)) { Name = "root" };
+            sp.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+            sp.SetValue(Panel.BackgroundProperty, Brushes.Transparent);
+
+            var ring = new FrameworkElementFactory(typeof(Border)) { Name = "ring" };
+            ring.SetValue(Border.WidthProperty, 15.0);
+            ring.SetValue(Border.HeightProperty, 15.0);
+            ring.SetValue(Border.CornerRadiusProperty, new CornerRadius(7.5));
+            ring.SetValue(Border.BorderThicknessProperty, new Thickness(1.5));
+            ring.SetValue(Border.BorderBrushProperty, Brush("TextDim"));
+            ring.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+            ring.SetValue(Border.MarginProperty, new Thickness(0, 1, 7, 0));   // +1 top settles it against the text optical center
+
+            var dot = new FrameworkElementFactory(typeof(Border)) { Name = "dot" };
+            dot.SetValue(Border.WidthProperty, 7.0);
+            dot.SetValue(Border.HeightProperty, 7.0);
+            dot.SetValue(Border.CornerRadiusProperty, new CornerRadius(3.5));
+            dot.SetValue(Border.BackgroundProperty, Brush("RadioAccent"));
+            dot.SetValue(Border.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            dot.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+            dot.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            ring.AppendChild(dot);
+
+            var cp = new FrameworkElementFactory(typeof(ContentPresenter));
+            cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+            sp.AppendChild(ring);
+            sp.AppendChild(cp);
+
+            var ct = new ControlTemplate(typeof(RadioButton)) { VisualTree = sp };
+            var on = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
+            on.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible) { TargetName = "dot" });
+            on.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("RadioAccent")) { TargetName = "ring" });
+            ct.Triggers.Add(on);
+            var off = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            off.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4) { TargetName = "root" });
+            ct.Triggers.Add(off);
+            return ct;
+        }
+
+        // Themed single-line input, fully self-contained (templated from the theme brushes) so it renders
+        // correctly in ANY window without depending on a window-scoped XAML style. Kills the OS-default
+        // white box / blue focus + selection chrome.
         public static TextBox Field(double width = double.NaN)
         {
-            var tb = new TextBox { FontFamily = UiFont, FontSize = 12 };
-            if (Application.Current?.TryFindResource("FormFieldTextBox") is Style s) tb.Style = s;
+            var tb = new TextBox
+            {
+                FontFamily         = UiFont,
+                FontSize           = 12,
+                Background         = Brush("BgCanvas"),
+                Foreground         = Brush("TextPrimary"),
+                BorderBrush        = Brush("BorderDim"),
+                BorderThickness    = new Thickness(1),
+                Padding            = new Thickness(6, 4, 6, 4),
+                CaretBrush         = Brush("TextPrimary"),
+                SelectionBrush     = Brush("AccentDim"),
+                SelectionTextBrush = Brush("TextPrimary"),
+                Template           = FieldTemplate()
+            };
             if (!double.IsNaN(width)) tb.Width = width;
             return tb;
         }
 
+        private static ControlTemplate FieldTemplate()
+        {
+            var b = new FrameworkElementFactory(typeof(Border));
+            b.SetBinding(Border.BackgroundProperty, new Binding("Background") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            b.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            b.SetBinding(Border.BorderThicknessProperty, new Binding("BorderThickness") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            b.SetValue(Border.CornerRadiusProperty, RadControl);
+            var sv = new FrameworkElementFactory(typeof(ScrollViewer)) { Name = "PART_ContentHost" };
+            sv.SetValue(Control.PaddingProperty, new Thickness(0));
+            b.AppendChild(sv);
+            return new ControlTemplate(typeof(TextBox)) { VisualTree = b };
+        }
+
         // A dialog section heading (e.g. "ROTATE", "PAGE NUMBERS").
-        public static TextBlock SectionHeader(string text) => new TextBlock
+        public static TextBlock SectionHeader(string text) => new()
         {
             Text       = text,
             FontFamily = MonoFont,
@@ -129,7 +216,7 @@ namespace KillerPDF
         };
 
         // A small secondary label sitting above/beside a field.
-        public static TextBlock GroupLabel(string text) => new TextBlock
+        public static TextBlock GroupLabel(string text) => new()
         {
             Text       = text,
             FontFamily = UiFont,
