@@ -47,7 +47,7 @@ namespace KillerPDF
                 BorderBrush     = border ?? Brushes.Transparent,
                 BorderThickness = new Thickness(border == null ? 0 : 1),
                 Cursor          = Cursors.Hand,
-                FontFamily      = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                FontFamily      = UiKit.UiFont,
                 FontSize        = 12,
                 FocusVisualStyle = null,
                 Template        = Template(),
@@ -70,7 +70,7 @@ namespace KillerPDF
                 new Binding("BorderThickness") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
             bf.SetBinding(Border.PaddingProperty,
                 new Binding("Padding") { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
-            bf.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+            bf.SetValue(Border.CornerRadiusProperty, UiKit.RadControl);
 
             var cp = new FrameworkElementFactory(typeof(ContentPresenter));
             cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);

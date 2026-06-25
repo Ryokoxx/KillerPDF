@@ -16,6 +16,29 @@
                  DynamicResource is unfound inside a dialog and the red hover box renders square. -->
             <CornerRadius x:Key="ChromeCloseCorner">0,7,0,0</CornerRadius>
 
+            <!-- ============================================================================
+                 DESIGN TOKENS - the single source of truth every tool/dialog references.
+                 Theme COLORS live in Themes/*.xaml; these are the theme-independent type,
+                 shape, and elevation primitives. Code-built UI reads the same keys through
+                 UiKit (UiKit.cs), so XAML and code can never drift apart.
+                 ============================================================================ -->
+
+            <!-- Type families -->
+            <FontFamily x:Key="UiFont">Segoe UI, Microsoft JhengHei UI, Nirmala UI</FontFamily>
+            <FontFamily x:Key="MonoFont">Consolas</FontFamily>
+            <FontFamily x:Key="IconFont">Segoe MDL2 Assets</FontFamily>
+
+            <!-- Corner radii (one rounding scale for the whole app) -->
+            <CornerRadius x:Key="RadControl">3</CornerRadius>
+            <CornerRadius x:Key="RadCard">6</CornerRadius>
+            <CornerRadius x:Key="RadWindow">7</CornerRadius>
+
+            <!-- Elevation: a single shared instance per shadow can be applied to many elements -->
+            <DropShadowEffect x:Key="ShadowText"   Color="Black" BlurRadius="3"  ShadowDepth="1" Direction="270" Opacity="0.6"/>
+            <DropShadowEffect x:Key="ShadowIcon"   Color="Black" BlurRadius="4"  ShadowDepth="1" Direction="270" Opacity="0.9"/>
+            <DropShadowEffect x:Key="ShadowBar"    Color="Black" BlurRadius="6"  ShadowDepth="3" Direction="270" Opacity="0.38"/>
+            <DropShadowEffect x:Key="ShadowDialog" Color="Black" BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.6"/>
+
             <!-- Global themed tooltip (replaces the plain white system box) -->
             <Style TargetType="ToolTip">
                 <Setter Property="Background" Value="{DynamicResource BgModal}"/>

@@ -44,7 +44,7 @@ namespace KillerPDF
                 {
                     Width = 200,
                     Height = 26,
-                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 13,
                     SelectionBrush = AccentBrush(),
                     BorderThickness = new Thickness(1),
@@ -79,7 +79,7 @@ namespace KillerPDF
                 // Fixed width + centered so the result count never resizes the bar.
                 _searchStatus = new TextBlock
                 {
-                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center,
                     TextAlignment = TextAlignment.Center,
@@ -95,7 +95,7 @@ namespace KillerPDF
                     var b = new Button
                     {
                         Content    = glyph,
-                        FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                        FontFamily = UiKit.IconFont,
                         FontSize   = 12,
                         Width = 26, Height = 24,
                         Padding    = new Thickness(0),   // ToolbarButton's 10,6 padding clips the glyph in a 26px button
@@ -114,7 +114,7 @@ namespace KillerPDF
                 var searchIcon = new TextBlock
                 {
                     Text = "",  // Segoe MDL2 Search / magnifying glass
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontFamily = UiKit.IconFont,
                     FontSize = 12,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 0, 6, 0),

@@ -137,7 +137,7 @@ namespace KillerPDF
                 var dp = new DockPanel { HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 170 };
                 var codeTb = new TextBlock
                 {
-                    Text = code, FontFamily = new FontFamily("Consolas"), FontSize = 11,
+                    Text = code, FontFamily = UiKit.MonoFont, FontSize = 11,
                     Foreground = (Brush)FindResource("TextSecondary"),
                     Margin = new Thickness(20, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center
                 };

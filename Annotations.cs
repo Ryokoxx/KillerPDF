@@ -44,7 +44,7 @@ namespace KillerPDF
             // height (so a free-form-resized box behaves like an image/crop frame).
             FontFamily famsel;
             try { famsel = new FontFamily(string.IsNullOrEmpty(ta.FontName) ? "Segoe UI" : ta.FontName); }
-            catch { famsel = new FontFamily("Segoe UI"); }
+            catch { famsel = UiKit.UiFont; }
             var tb = new TextBlock
             {
                 Text = ta.Content,

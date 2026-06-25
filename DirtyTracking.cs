@@ -99,7 +99,7 @@ namespace KillerPDF
             {
                 Text = message,
                 Foreground = Brushes.White,
-                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 14,
                 HorizontalAlignment = HorizontalAlignment.Center
             };

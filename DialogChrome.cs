@@ -36,13 +36,13 @@ namespace KillerPDF
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            var segoe = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            var segoe = UiKit.UiFont;
             var title = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(16, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 }
+                Effect = UiKit.ShadowText()
             };
 
             int kp = fullTitle?.IndexOf("KillerPDF", StringComparison.Ordinal) ?? -1;
@@ -52,11 +52,11 @@ namespace KillerPDF
                 title.Children.Add(new TextBlock { Text = "PDF", FontFamily = segoe, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = Brush(owner, "AccentLogo", Brushes.LimeGreen), VerticalAlignment = VerticalAlignment.Center });
                 string after = fullTitle![(kp + "KillerPDF".Length)..];
                 if (!string.IsNullOrEmpty(after))
-                    title.Children.Add(new TextBlock { Text = after, FontFamily = new FontFamily("Consolas"), FontSize = 14, Foreground = Brush(owner, "TextSecondary", Brushes.Gray), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
+                    title.Children.Add(new TextBlock { Text = after, FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = Brush(owner, "TextSecondary", Brushes.Gray), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
             }
             else
             {
-                title.Children.Add(new TextBlock { Text = fullTitle ?? "", FontFamily = new FontFamily("Consolas"), FontSize = 14, Foreground = Brush(owner, "TextPrimary", Brushes.White), VerticalAlignment = VerticalAlignment.Center });
+                title.Children.Add(new TextBlock { Text = fullTitle ?? "", FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = Brush(owner, "TextPrimary", Brushes.White), VerticalAlignment = VerticalAlignment.Center });
             }
             Grid.SetColumn(title, 0);
             grid.Children.Add(title);
@@ -69,7 +69,7 @@ namespace KillerPDF
             }
             else
             {
-                close.FontFamily = new FontFamily("Segoe MDL2 Assets");
+                close.FontFamily = UiKit.IconFont;
                 close.FontSize = 10;
                 close.Width = 46; close.Height = 36;
                 close.Foreground = Brush(owner, "DangerRed", Brushes.Red);

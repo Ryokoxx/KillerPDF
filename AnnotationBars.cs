@@ -436,7 +436,7 @@ namespace KillerPDF
                 var lbl = new TextBlock
                 {
                     Text = label,
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -467,7 +467,7 @@ namespace KillerPDF
             var colorLbl = new TextBlock
             {
                 Text = Loc("Str_Bar_Color"),
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0)
@@ -562,7 +562,7 @@ namespace KillerPDF
                 var sizeLbl = new TextBlock
                 {
                     Text = Loc("Str_Bar_Size"),
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 0, 6, 0)
@@ -587,7 +587,7 @@ namespace KillerPDF
                 var sizeLabel = new TextBlock
                 {
                     Text = $"{_drawWidth:F0}px",
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(4, 0, 0, 0),
@@ -605,7 +605,7 @@ namespace KillerPDF
             var opacityLbl = new TextBlock
             {
                 Text = Loc("Str_Bar_Opacity"),
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0)
@@ -626,7 +626,7 @@ namespace KillerPDF
             var opacityLabel = new TextBlock
             {
                 Text = $"{(int)(currentOpacity / 255.0 * 100)}%",
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 6, 0),

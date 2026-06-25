@@ -863,7 +863,7 @@ namespace KillerPDF
             var lbl = new TextBlock
             {
                 Text = "Font size:",
-                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontSize = 11,
+                FontFamily = UiKit.UiFont, FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0)
             };
             lbl.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
@@ -872,7 +872,7 @@ namespace KillerPDF
             var sizeLbl = new TextBlock
             {
                 Text = curPt.ToString("0"),
-                FontFamily = new FontFamily("Segoe UI"), FontSize = 12,
+                FontFamily = UiKit.UiFont, FontSize = 12,
                 MinWidth = 22, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center
             };
             sizeLbl.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");
@@ -907,7 +907,7 @@ namespace KillerPDF
         {
             var t = new TextBlock
             {
-                Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 11,
+                Text = glyph, FontFamily = UiKit.IconFont, FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
             };
             t.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");

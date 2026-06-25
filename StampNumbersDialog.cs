@@ -50,7 +50,7 @@ namespace KillerPDF
             WindowStartupLocation = owner != null
                 ? WindowStartupLocation.CenterOwner
                 : WindowStartupLocation.CenterScreen;
-            FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            FontFamily = UiKit.UiFont;
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
             UseLayoutRounding = true;

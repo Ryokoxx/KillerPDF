@@ -295,7 +295,7 @@ namespace KillerPDF
             {
                 Text = Loc("Str_Sig_Title"),
                 Foreground = (SolidColorBrush)FindResource("Accent"),   // accent heading, shared secondary-window style
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = UiKit.MonoFont,
                 FontWeight = FontWeights.Bold,
                 FontSize = 14,
                 Margin = new Thickness(4, 2, 4, 2),
@@ -308,7 +308,7 @@ namespace KillerPDF
             var sigCloseBtn = new TextBlock
             {
                 Text = "",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = UiKit.IconFont,
                 FontSize = 11,
                 Foreground = (SolidColorBrush)FindResource("TextSecondary"),
                 Cursor = Cursors.Hand,
@@ -444,7 +444,7 @@ namespace KillerPDF
                 {
                     Text = sectionTitle,
                     Foreground = (SolidColorBrush)FindResource("TextSecondary"),
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontWeight = FontWeights.SemiBold,
                     FontSize = 11,
                     Margin = new Thickness(4, 6, 4, 2)
@@ -471,7 +471,7 @@ namespace KillerPDF
                     {
                         Text = Loc("Str_Sig_None"),
                         Foreground = (SolidColorBrush)FindResource("TextSecondary"),
-                        FontFamily = new FontFamily("Segoe UI"),
+                        FontFamily = UiKit.UiFont,
                         FontSize = 11,
                         FontStyle = FontStyles.Italic,
                         Margin = new Thickness(4, 2, 4, 6),
@@ -614,7 +614,7 @@ namespace KillerPDF
             // the text a soft shadow without an Effect rasterizing/blurring the visible text itself.
             StackPanel BuildSigTitle(bool shadow)
             {
-                var fam = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+                var fam = UiKit.UiFont;
                 System.Windows.Media.Brush primary = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("TextPrimary");
                 System.Windows.Media.Brush logo    = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("AccentLogo");
                 System.Windows.Media.Brush sub      = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("TextSecondary");
@@ -735,7 +735,7 @@ namespace KillerPDF
             // Pen-width selector: three preset thicknesses, active one highlighted. On the left so the
             // modal does not read bottom-right-heavy.
             var penRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 6, 12, 0), VerticalAlignment = VerticalAlignment.Center };
-            penRow.Children.Add(new TextBlock { Text = Loc("Str_Sig_Pen"), Foreground = (SolidColorBrush)FindResource("TextSecondary"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
+            penRow.Children.Add(new TextBlock { Text = Loc("Str_Sig_Pen"), Foreground = (SolidColorBrush)FindResource("TextSecondary"), FontFamily = UiKit.UiFont, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) });
             var penOptions = new (string Label, double W)[] { (Loc("Str_Sig_Thin"), 2.0), (Loc("Str_Sig_Medium"), 4.5), (Loc("Str_Sig_Thick"), 9.0) };
             var penBtns = new List<Button>();
             void RefreshPen()
@@ -759,7 +759,7 @@ namespace KillerPDF
                     Margin = new Thickness(0, 0, 6, 0),
                     BorderThickness = new Thickness(1),
                     Cursor = Cursors.Hand,
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 11
                 };
                 pb.Click += (s2, e2) => { penWidth = ww; RefreshPen(); };

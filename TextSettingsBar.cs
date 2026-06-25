@@ -41,7 +41,7 @@ namespace KillerPDF
         // editing stays WYSIWYG with the text bar. Bad font names fall back to Segoe UI rather than throwing.
         private void StyleEditBox(TextBox tb)
         {
-            try { tb.FontFamily = new FontFamily(_textFontName); } catch { tb.FontFamily = new FontFamily("Segoe UI"); }
+            try { tb.FontFamily = new FontFamily(_textFontName); } catch { tb.FontFamily = UiKit.UiFont; }
             tb.FontWeight = _textBold ? FontWeights.Bold : FontWeights.Normal;
             tb.FontStyle = _textItalic ? FontStyles.Italic : FontStyles.Normal;
             tb.TextDecorations = BuildDecorations(_textUnderline, _textStrike);
@@ -176,7 +176,7 @@ namespace KillerPDF
                 var t = new TextBlock
                 {
                     Text = text,
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = rightAlign ? HorizontalAlignment.Right : HorizontalAlignment.Left,
@@ -325,7 +325,7 @@ namespace KillerPDF
             var sizeBox = new TextBox
             {
                 Text = $"{_textFontSize:F0}",
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 Width = 32,
                 MaxLength = 4,
@@ -344,7 +344,7 @@ namespace KillerPDF
             var ptLabel = new TextBlock
             {
                 Text = "pt",
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(2, 0, 0, 0)
@@ -386,7 +386,7 @@ namespace KillerPDF
                 var st = new TextBlock
                 {
                     Text = glyph,
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 13,
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Center
@@ -428,7 +428,7 @@ namespace KillerPDF
                 var gt = new TextBlock
                 {
                     Text = glyph,
-                    FontFamily = new FontFamily("Segoe UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 12,
                     FontWeight = fw,
                     FontStyle = fs,
@@ -461,7 +461,7 @@ namespace KillerPDF
                 Width = 132,
                 Height = 22,
                 VerticalAlignment = VerticalAlignment.Center,
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 MaxDropDownHeight = 320,
                 Margin = new Thickness(0, 0, 4, 0)
@@ -500,7 +500,7 @@ namespace KillerPDF
             var opacityLabel = new TextBlock
             {
                 Text = $"{(int)(_textOpacity / 255.0 * 100)}%",
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 0, 0),
@@ -534,7 +534,7 @@ namespace KillerPDF
             var fillOpLabel = new TextBlock
             {
                 Text = $"{(int)(curFillA / 255.0 * 100)}%",
-                FontFamily = new FontFamily("Segoe UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 10, 0, 0),

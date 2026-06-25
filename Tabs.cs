@@ -607,13 +607,13 @@ namespace KillerPDF
             content.Children.Add(new TextBlock
             {
                 Text = overflow.Count.ToString(),
-                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontSize = 11,
+                FontFamily = UiKit.UiFont, FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(3, 0, 5, 0),
             });
             content.Children.Add(new TextBlock
             {
                 Text = "",   // Segoe MDL2 chevron-down
-                FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 10,
+                FontFamily = UiKit.IconFont, FontSize = 10,
                 VerticalAlignment = VerticalAlignment.Center,
             });
 
@@ -690,7 +690,7 @@ namespace KillerPDF
             var label = new TextBlock
             {
                 Text = (s.IsDirty ? "• " : "") + s.Title,
-                FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                FontFamily = UiKit.UiFont,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis,
@@ -722,7 +722,7 @@ namespace KillerPDF
             var close = new Button
             {
                 Content = "",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = UiKit.IconFont,
                 FontSize = 9,
                 Width = 16,
                 Height = 16,
@@ -949,7 +949,7 @@ namespace KillerPDF
             var b = new Button
             {
                 Content = "",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontFamily = UiKit.IconFont,
                 FontSize = 11,
                 Width = 24,
                 Height = 22,

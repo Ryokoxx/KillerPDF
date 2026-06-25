@@ -825,7 +825,7 @@ namespace KillerPDF
                     var rmBtn = new Button
                     {
                         Content = "",
-                        FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                        FontFamily = UiKit.IconFont,
                         FontSize = 9,
                         Width = 18, Height = 18,
                         VerticalAlignment = VerticalAlignment.Center,
@@ -880,7 +880,7 @@ namespace KillerPDF
             var recents = App.GetRecentFiles();
             if (recents.Count == 0) { RecentFilesBox.Visibility = Visibility.Collapsed; return; }
             RecentFilesBox.Visibility = Visibility.Visible;
-            var fam = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            var fam = UiKit.UiFont;
             foreach (var p in recents)
             {
                 string path = p;   // capture
@@ -933,7 +933,7 @@ namespace KillerPDF
                 var delIcon = new TextBlock
                 {
                     Text              = "",   // close (X) glyph below set via code
-                    FontFamily        = new FontFamily("Segoe MDL2 Assets"),
+                    FontFamily        = UiKit.IconFont,
                     FontSize          = 11,
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Center

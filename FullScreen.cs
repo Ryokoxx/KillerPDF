@@ -146,7 +146,7 @@ namespace KillerPDF
                 Child = new TextBlock
                 {
                     Text = Loc("Str_FullScreen_Hint"), Foreground = Brushes.White, FontSize = 13,
-                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI")
+                    FontFamily = UiKit.UiFont
                 }
             };
             Grid.SetRow(toast, 0);

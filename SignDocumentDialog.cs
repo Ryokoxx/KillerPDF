@@ -58,7 +58,7 @@ namespace KillerPDF
 
             // Match the main window's crisp text rendering (these are set in XAML on the main window;
             // a code-built window needs them explicitly or text falls back to the rougher default).
-            FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            FontFamily = UiKit.UiFont;
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
             UseLayoutRounding = true;

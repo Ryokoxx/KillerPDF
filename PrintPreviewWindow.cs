@@ -97,7 +97,7 @@ namespace KillerPDF
             // Match the main window's crisp text rendering. The main window sets these in XAML;
             // this window is built in code, so without them the text falls back to rougher
             // defaults (the "not anti-aliased" look).
-            FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            FontFamily = UiKit.UiFont;
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
             UseLayoutRounding = true;
@@ -159,52 +159,6 @@ namespace KillerPDF
             tb.Template            = MakeTextBoxTemplate();
         }
 
-        // Themed checkbox: a rounded box (canvas bg + dim border) with an accent check glyph that
-        // appears when checked, matching the rest of the dialog instead of the white system control.
-        private static void StyleCheckBox(CheckBox cb)
-        {
-            cb.Foreground = R("TextPrimary");
-
-            var row = new FrameworkElementFactory(typeof(StackPanel));
-            row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-
-            var box = new FrameworkElementFactory(typeof(Border));
-            box.SetValue(Border.WidthProperty, 16.0);
-            box.SetValue(Border.HeightProperty, 16.0);
-            box.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
-            box.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-            box.SetValue(Border.BorderBrushProperty, R("BorderDim"));   // subtle outline; the check is the accent
-            box.SetValue(Border.BackgroundProperty, R("BgCanvas"));
-            box.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
-            box.SetValue(Border.MarginProperty, new Thickness(0, 0, 8, 0));
-
-            var check = new FrameworkElementFactory(typeof(TextBlock)) { Name = "check" };
-            check.SetValue(TextBlock.TextProperty, "");   // Segoe MDL2 checkmark
-            check.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
-            check.SetValue(TextBlock.FontSizeProperty, 14.0);
-            check.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
-            check.SetValue(TextBlock.ForegroundProperty, R("RadioAccent"));   // match the radio buttons
-            check.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            check.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
-            check.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
-            box.AppendChild(check);
-
-            var content = new FrameworkElementFactory(typeof(ContentPresenter));
-            content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-
-            row.AppendChild(box);
-            row.AppendChild(content);
-
-            var ct = new ControlTemplate(typeof(CheckBox)) { VisualTree = row };
-            var onChecked = new Trigger
-            {
-                Property = System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,
-                Value = true
-            };
-            onChecked.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible) { TargetName = "check" });
-            ct.Triggers.Add(onChecked);
-            cb.Template = ct;
-        }
 
         private static ControlTemplate MakeTextBoxTemplate()
         {
@@ -624,15 +578,8 @@ namespace KillerPDF
             });
 
             // Two-sided: the printer does the flipping; we just set the ticket when it's supported.
-            _duplexCheck = new CheckBox
-            {
-                Content    = S("Str_Print_TwoSided"),
-                Foreground = R("TextPrimary"),
-                Margin     = new Thickness(0, 2, 0, 14),
-                Cursor     = Cursors.Hand,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            StyleCheckBox(_duplexCheck);
+            _duplexCheck = UiKit.CheckBox(S("Str_Print_TwoSided"));
+            _duplexCheck.Margin = new Thickness(0, 2, 0, 14);
             _duplexCheck.Checked   += (_, _) => _duplex = true;
             _duplexCheck.Unchecked += (_, _) => _duplex = false;
             panel.Children.Add(_duplexCheck);

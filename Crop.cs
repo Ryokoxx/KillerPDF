@@ -323,13 +323,13 @@ namespace KillerPDF
             {
                 outer.Children.Add(new TextBlock
                 {
-                    Text = lbl, FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                    Text = lbl, FontFamily = UiKit.UiFont, FontSize = 11,
                     VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0),
                     Foreground = Res("TextSecondary")
                 });
                 var tb = new TextBox
                 {
-                    Width = width, Height = 22, FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                    Width = width, Height = 22, FontFamily = UiKit.UiFont, FontSize = 11,
                     BorderThickness = new Thickness(1), Padding = new Thickness(3, 1, 3, 1),
                     VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 0, 8, 0), Style = (Style)FindResource("FormFieldTextBox")
@@ -346,7 +346,7 @@ namespace KillerPDF
             // Group labels (GIMP-style "Position" / "Size") so the single-letter fields read clearly.
             void GroupLabel(string t, double leftPad) => outer.Children.Add(new TextBlock
             {
-                Text = t, FontFamily = new FontFamily("Segoe UI"), FontSize = 11, FontWeight = FontWeights.SemiBold,
+                Text = t, FontFamily = UiKit.UiFont, FontSize = 11, FontWeight = FontWeights.SemiBold,
                 Foreground = Res("TextSecondary"), VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(leftPad, 0, 6, 0)
             });
@@ -379,13 +379,13 @@ namespace KillerPDF
             // All checked -> every page; else a typed range like "1-3,5"; else just the current page.
             outer.Children.Add(new TextBlock
             {
-                Text = Loc("Str_Crop_Pages"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                Text = Loc("Str_Crop_Pages"), FontFamily = UiKit.UiFont, FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0),
                 Foreground = Res("TextSecondary")
             });
             _cropRangeBox = new TextBox
             {
-                Width = 64, Height = 22, FontFamily = new FontFamily("Segoe UI"), FontSize = 11,
+                Width = 64, Height = 22, FontFamily = UiKit.UiFont, FontSize = 11,
                 BorderThickness = new Thickness(1), Padding = new Thickness(3, 1, 3, 1),
                 VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 0), ToolTip = Loc("Str_Crop_RangeTip"),
@@ -402,7 +402,7 @@ namespace KillerPDF
             var allBox = new Border { Width = 15, Height = 15, CornerRadius = new CornerRadius(3), BorderThickness = new Thickness(1), BorderBrush = _swatchDimBorder, Background = Brushes.Transparent, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0), Child = allTick };
             var allRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Margin = new Thickness(0, 0, 10, 0), ToolTip = Loc("Str_Crop_AllTip") };
             allRow.Children.Add(allBox);
-            allRow.Children.Add(new TextBlock { Text = Loc("Str_Crop_All"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Foreground = Res("TextSecondary") });
+            allRow.Children.Add(new TextBlock { Text = Loc("Str_Crop_All"), FontFamily = UiKit.UiFont, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Foreground = Res("TextSecondary") });
             allRow.MouseLeftButtonDown += (_, _) =>
             {
                 cropAll = !cropAll;

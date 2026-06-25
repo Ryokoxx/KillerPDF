@@ -630,7 +630,7 @@ namespace KillerPDF
                 btn.Content = new TextBlock
                 {
                     Text = Loc(key),
-                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 12,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -645,14 +645,14 @@ namespace KillerPDF
                 row.Children.Add(new TextBlock
                 {
                     Text = glyph,
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontFamily = UiKit.IconFont,
                     FontSize = glyphSize,
                     VerticalAlignment = VerticalAlignment.Center
                 });
                 row.Children.Add(new TextBlock
                 {
                     Text = Loc(key),
-                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 12,
                     Margin = new Thickness(7, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
@@ -669,14 +669,14 @@ namespace KillerPDF
                 col.Children.Add(new TextBlock
                 {
                     Text = glyph,
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                    FontFamily = UiKit.IconFont,
                     FontSize = glyphSize,
                     HorizontalAlignment = HorizontalAlignment.Center
                 });
                 col.Children.Add(new TextBlock
                 {
                     Text = Loc(key),
-                    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"),
+                    FontFamily = UiKit.UiFont,
                     FontSize = 10,
                     Margin = new Thickness(0, 2, 0, 0),
                     HorizontalAlignment = HorizontalAlignment.Center,

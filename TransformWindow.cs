@@ -119,14 +119,14 @@ namespace KillerPDF
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 }
             };
-            var fam = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
+            var fam = UiKit.UiFont;
             wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary"), VerticalAlignment = VerticalAlignment.Center });
             wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo"), VerticalAlignment = VerticalAlignment.Center });
-            wm.Children.Add(new TextBlock { Text = "  -  Transform", FontFamily = new FontFamily("Consolas"), FontSize = 14, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
+            wm.Children.Add(new TextBlock { Text = "  -  Transform", FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
             titleBar.Children.Add(wm);
             var close = new Button
             {
-                Content = "", FontFamily = new FontFamily("Segoe MDL2 Assets"), FontSize = 11,
+                Content = "", FontFamily = UiKit.IconFont, FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0)
             };
@@ -148,7 +148,7 @@ namespace KillerPDF
             var bottom = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
             var resetAll = new TextBlock
             {
-                Text = S("Str_Tf_ResetAll"), FontFamily = new FontFamily("Segoe UI"), FontSize = 12,
+                Text = S("Str_Tf_ResetAll"), FontFamily = UiKit.UiFont, FontSize = 12,
                 Foreground = R("TextSecondary"), Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Left
             };
@@ -199,7 +199,7 @@ namespace KillerPDF
             stack.Children.Add(ValueRow(S("Str_Tf_Size"), "100%", out _scaleReadout, out var scaleReset));
             scaleReset.Click += (_, _2) => _scaleSlider.Value = 100;
 
-            stack.Children.Add(new TextBlock { Text = S("Str_Tf_WhenScaling"), Foreground = R("TextSecondary"), FontFamily = new FontFamily("Segoe UI"), FontSize = 11, Margin = new Thickness(0, 10, 0, 4) });
+            stack.Children.Add(new TextBlock { Text = S("Str_Tf_WhenScaling"), Foreground = R("TextSecondary"), FontFamily = UiKit.UiFont, FontSize = 11, Margin = new Thickness(0, 10, 0, 4) });
             _resizeRadio = MakeRadio(S("Str_Tf_ResizePage"), true, themeRadio);
             var fixedRadio = MakeRadio(S("Str_Tf_KeepSize"), false, themeRadio);
             _resizeRadio.Checked += (_, _2) => { _fixedPage = false; UpdatePreview(); };
@@ -209,7 +209,7 @@ namespace KillerPDF
 
             // Live output dimensions, so scale changes (including above 100%, where the preview clamps to
             // fit) are always legible as a number even when the page can't grow on screen.
-            _sizeReadout = new TextBlock { Foreground = R("TextSecondary"), FontFamily = new FontFamily("Consolas"), FontSize = 11, Margin = new Thickness(0, 8, 0, 0) };
+            _sizeReadout = new TextBlock { Foreground = R("TextSecondary"), FontFamily = UiKit.MonoFont, FontSize = 11, Margin = new Thickness(0, 8, 0, 0) };
             stack.Children.Add(_sizeReadout);
 
             stack.Children.Add(Divider());
@@ -232,14 +232,14 @@ namespace KillerPDF
             stack.Children.Add(new TextBlock
             {
                 Text = S("Str_Tf_SkewHint"),
-                Foreground = R("TextSecondary"), FontFamily = new FontFamily("Segoe UI"), FontSize = 10,
+                Foreground = R("TextSecondary"), FontFamily = UiKit.UiFont, FontSize = 10,
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0)
             });
             // Live cursor coordinates (page points), so the user can place the line precisely on the small
             // preview. Start point on press, end point as they drag.
             _lineCoords = new TextBlock
             {
-                Text = "", Foreground = R("TextSecondary"), FontFamily = new FontFamily("Consolas"),
+                Text = "", Foreground = R("TextSecondary"), FontFamily = UiKit.MonoFont,
                 FontSize = 11, LineHeight = 16, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(3)
             };
             stack.Children.Add(_lineCoords);
@@ -433,7 +433,7 @@ namespace KillerPDF
 
         private TextBlock SectionHeader(string text) => new()
         {
-            Text = text, Foreground = R("TextSecondary"), FontFamily = new FontFamily("Segoe UI"),
+            Text = text, Foreground = R("TextSecondary"), FontFamily = UiKit.UiFont,
             FontSize = 10, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 4)
         };
 
@@ -454,7 +454,7 @@ namespace KillerPDF
             row.Children.Add(reset);
             valueBlock = new TextBlock
             {
-                Text = value, Foreground = R("TextPrimary"), FontFamily = new FontFamily("Consolas"),
+                Text = value, Foreground = R("TextPrimary"), FontFamily = UiKit.MonoFont,
                 FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
                 TextAlignment = TextAlignment.Right, Margin = new Thickness(0, 0, 8, 0)
             };
@@ -462,7 +462,7 @@ namespace KillerPDF
             row.Children.Add(valueBlock);
             row.Children.Add(new TextBlock
             {
-                Text = label, Foreground = R("TextSecondary"), FontFamily = new FontFamily("Segoe UI"),
+                Text = label, Foreground = R("TextSecondary"), FontFamily = UiKit.UiFont,
                 FontSize = 11, VerticalAlignment = VerticalAlignment.Center
             });
             return row;
@@ -474,7 +474,7 @@ namespace KillerPDF
             {
                 Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center },
                 IsChecked = isChecked, Foreground = R("TextPrimary"),
-                FontFamily = new FontFamily("Segoe UI"), FontSize = 12, Margin = new Thickness(0, 3, 0, 0)
+                FontFamily = UiKit.UiFont, FontSize = 12, Margin = new Thickness(0, 3, 0, 0)
             };
             if (style != null) rb.Style = style;
             return rb;
@@ -482,61 +482,10 @@ namespace KillerPDF
 
         private CheckBox MakeCheck(string text)
         {
-            var cb = new CheckBox
-            {
-                Content = text, FontFamily = new FontFamily("Segoe UI"), FontSize = 12,
-                Margin = new Thickness(0, 3, 0, 0), Cursor = Cursors.Hand,
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            StyleCheckBox(cb);
+            var cb = UiKit.CheckBox(text);
+            cb.Margin = new Thickness(0, 3, 0, 0);
             return cb;
         }
 
-        // Same code-built checkbox chrome the print dialog uses (no XAML CheckBox style exists; it's templated
-        // in code): a small rounded box with an accent checkmark that shows when checked.
-        private static void StyleCheckBox(CheckBox cb)
-        {
-            cb.Foreground = R("TextPrimary");
-
-            var row = new FrameworkElementFactory(typeof(StackPanel));
-            row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-
-            var box = new FrameworkElementFactory(typeof(Border));
-            box.SetValue(Border.WidthProperty, 16.0);
-            box.SetValue(Border.HeightProperty, 16.0);
-            box.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
-            box.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-            box.SetValue(Border.BorderBrushProperty, R("BorderDim"));
-            box.SetValue(Border.BackgroundProperty, R("BgCanvas"));
-            box.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
-            box.SetValue(Border.MarginProperty, new Thickness(0, 0, 8, 0));
-
-            var check = new FrameworkElementFactory(typeof(TextBlock)) { Name = "check" };
-            check.SetValue(TextBlock.TextProperty, "");
-            check.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe MDL2 Assets"));
-            check.SetValue(TextBlock.FontSizeProperty, 14.0);
-            check.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
-            check.SetValue(TextBlock.ForegroundProperty, R("RadioAccent"));
-            check.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            check.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
-            check.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
-            box.AppendChild(check);
-
-            var content = new FrameworkElementFactory(typeof(ContentPresenter));
-            content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-
-            row.AppendChild(box);
-            row.AppendChild(content);
-
-            var ct = new ControlTemplate(typeof(CheckBox)) { VisualTree = row };
-            var onChecked = new Trigger
-            {
-                Property = System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,
-                Value = true
-            };
-            onChecked.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible) { TargetName = "check" });
-            ct.Triggers.Add(onChecked);
-            cb.Template = ct;
-        }
     }
 }
