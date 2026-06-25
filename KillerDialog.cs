@@ -90,8 +90,8 @@ namespace KillerPDF
             if (title == "KillerPDF")
             {
                 var wm = new StackPanel { Orientation = Orientation.Horizontal };
-                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("TextPrimary") });
-                wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("AccentLogo") });
+                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = UiKit.UiFont, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("TextPrimary") });
+                wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = UiKit.UiFont, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("AccentLogo") });
                 wm.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 };
                 titleBar.Child = wm;
             }
@@ -103,7 +103,7 @@ namespace KillerPDF
                     Foreground = R("Accent"),
                     FontWeight = FontWeights.Bold,   // blue title -> bold
                     FontSize = 14,
-                    FontFamily = new System.Windows.Media.FontFamily("Consolas")
+                    FontFamily = UiKit.MonoFont
                 };
             }
             root.Children.Add(titleBar);

@@ -599,52 +599,8 @@ namespace KillerPDF
             };
             var rootStack = new StackPanel();
 
-            // Title bar - transparent so the window-wide film grain shows through it too. No padding;
-            // the chrome close button sets the (slim) height and the title gets its own left inset.
-            var titleBar = new Border
-            {
-                Background   = Brushes.Transparent,
-                CornerRadius = new CornerRadius(5, 5, 0, 0)
-            };
-            titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
-            var titleGrid = new Grid();
-            titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            // Wordmark + subtitle. A LAYERED shadow (a blurred dark copy behind a crisp copy) gives
-            // the text a soft shadow without an Effect rasterizing/blurring the visible text itself.
-            StackPanel BuildSigTitle(bool shadow)
-            {
-                var fam = UiKit.UiFont;
-                System.Windows.Media.Brush primary = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("TextPrimary");
-                System.Windows.Media.Brush logo    = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("AccentLogo");
-                System.Windows.Media.Brush sub      = shadow ? Brushes.Black : (System.Windows.Media.Brush)FindResource("TextSecondary");
-                var sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                sp.Children.Add(new TextBlock { Text = "Killer", FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 14, Foreground = primary, VerticalAlignment = VerticalAlignment.Center });
-                sp.Children.Add(new TextBlock { Text = "PDF",    FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 14, Foreground = logo, VerticalAlignment = VerticalAlignment.Center });
-                sp.Children.Add(new TextBlock { Text = $" - {Loc("Str_Sig_Create")}", FontFamily = fam, FontSize = 13, Foreground = sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
-                return sp;
-            }
-            var titleText = new Grid { Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-            var titleShadow = BuildSigTitle(true);
-            titleShadow.Opacity = 0.5;
-            titleShadow.Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 2 };
-            titleShadow.RenderTransform = new TranslateTransform(0.7, 1.2);
-            titleText.Children.Add(titleShadow);
-            titleText.Children.Add(BuildSigTitle(false));
-            Grid.SetColumn(titleText, 0);
-            var closeWinBtn = new Button
-            {
-                Content         = "",
-                VerticalAlignment = VerticalAlignment.Top,
-                // Same chrome close button as the print dialog / main window: red fill on hover
-                // that follows the window's rounded top-right corner.
-                Style = (Style)FindResource("ChromeCloseButton")
-            };
-            closeWinBtn.Click += (_, _2) => win.Close();
-            Grid.SetColumn(closeWinBtn, 1);
-            titleGrid.Children.Add(titleText);
-            titleGrid.Children.Add(closeWinBtn);
-            titleBar.Child = titleGrid;
+            // Title bar: shared KillerPDF wordmark + courier suffix + red chrome close, via DialogChrome.
+            var titleBar = DialogChrome.BuildTitleBar(win, this, "KillerPDF - " + Loc("Str_Sig_Create"), () => win.Close());
             rootStack.Children.Add(titleBar);
 
             var contentArea = new StackPanel();

@@ -107,33 +107,9 @@ namespace KillerPDF
 
             var root = new DockPanel();
 
-            // ---- Title bar: KillerPDF wordmark + " - Transform", draggable, with close. Transparent
-            //      background so the WHOLE bar is hit-testable (a null-background Grid only drags on its
-            //      children), making the entire title bar a drag handle. ----
-            var titleBar = new Grid { Height = 40, Background = Brushes.Transparent };
-            titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
-            var wm = new StackPanel
-            {
-                Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(16, 0, 0, 0),
-                Effect = new System.Windows.Media.Effects.DropShadowEffect
-                { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 }
-            };
-            var fam = UiKit.UiFont;
-            wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary"), VerticalAlignment = VerticalAlignment.Center });
-            wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = fam, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo"), VerticalAlignment = VerticalAlignment.Center });
-            wm.Children.Add(new TextBlock { Text = "  -  Transform", FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
-            titleBar.Children.Add(wm);
-            var close = new Button
-            {
-                Content = "", FontFamily = UiKit.IconFont, FontSize = 11,
-                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0)
-            };
-            // Full red rounded-corner chrome close button, matching Print Preview (not the small menu X).
-            if (owner?.TryFindResource("ChromeCloseButton") is Style closeStyle) close.Style = closeStyle;
-            close.Click += (_, _2) => { Applied = false; Close(); };
-            titleBar.Children.Add(close);
+            // Title bar: shared KillerPDF wordmark + courier suffix + red chrome close, via DialogChrome.
+            var titleBar = DialogChrome.BuildTitleBar(this, Owner, "KillerPDF - " + S("Str_Tf_Suffix"), () => { Applied = false; Close(); });
+            titleBar.Height = 40;
             DockPanel.SetDock(titleBar, Dock.Top);
             root.Children.Add(titleBar);
 

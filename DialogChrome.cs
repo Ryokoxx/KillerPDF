@@ -37,27 +37,39 @@ namespace KillerPDF
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var segoe = UiKit.UiFont;
-            var title = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(16, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                Effect = UiKit.ShadowText()
-            };
 
-            int kp = fullTitle?.IndexOf("KillerPDF", StringComparison.Ordinal) ?? -1;
-            if (kp >= 0)
+            // Build the wordmark row. A DropShadowEffect applied directly to text rasterizes it and
+            // disables ClearType, which reads as blurry. So we LAYER it instead: a blurred black duplicate
+            // sits behind a crisp, effect-free copy - soft shadow, sharp text. `shadow` paints the duplicate.
+            StackPanel BuildWordmark(bool shadow)
             {
-                title.Children.Add(new TextBlock { Text = "Killer", FontFamily = segoe, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = Brush(owner, "TextPrimary", Brushes.White), VerticalAlignment = VerticalAlignment.Center });
-                title.Children.Add(new TextBlock { Text = "PDF", FontFamily = segoe, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = Brush(owner, "AccentLogo", Brushes.LimeGreen), VerticalAlignment = VerticalAlignment.Center });
-                string after = fullTitle![(kp + "KillerPDF".Length)..];
-                if (!string.IsNullOrEmpty(after))
-                    title.Children.Add(new TextBlock { Text = after, FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = Brush(owner, "TextSecondary", Brushes.Gray), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
+                var sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                Brush primary   = shadow ? Brushes.Black : Brush(owner, "TextPrimary", Brushes.White);
+                Brush logo      = shadow ? Brushes.Black : Brush(owner, "AccentLogo", Brushes.LimeGreen);
+                Brush secondary = shadow ? Brushes.Black : Brush(owner, "TextSecondary", Brushes.Gray);
+                int kp = fullTitle?.IndexOf("KillerPDF", StringComparison.Ordinal) ?? -1;
+                if (kp >= 0)
+                {
+                    sp.Children.Add(new TextBlock { Text = "Killer", FontFamily = segoe, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = primary, VerticalAlignment = VerticalAlignment.Center });
+                    sp.Children.Add(new TextBlock { Text = "PDF", FontFamily = segoe, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = logo, VerticalAlignment = VerticalAlignment.Center });
+                    string after = fullTitle![(kp + "KillerPDF".Length)..];
+                    if (!string.IsNullOrEmpty(after))
+                        sp.Children.Add(new TextBlock { Text = after, FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = secondary, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 1, 0, 0) });
+                }
+                else
+                {
+                    sp.Children.Add(new TextBlock { Text = fullTitle ?? "", FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = primary, VerticalAlignment = VerticalAlignment.Center });
+                }
+                return sp;
             }
-            else
-            {
-                title.Children.Add(new TextBlock { Text = fullTitle ?? "", FontFamily = UiKit.MonoFont, FontSize = 14, Foreground = Brush(owner, "TextPrimary", Brushes.White), VerticalAlignment = VerticalAlignment.Center });
-            }
+
+            var title = new Grid { Margin = new Thickness(16, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var shadowLayer = BuildWordmark(true);
+            shadowLayer.Opacity = 0.5;
+            shadowLayer.Effect = new BlurEffect { Radius = 2 };
+            shadowLayer.RenderTransform = new TranslateTransform(0.7, 1.2);
+            title.Children.Add(shadowLayer);
+            title.Children.Add(BuildWordmark(false));
             Grid.SetColumn(title, 0);
             grid.Children.Add(title);
 
