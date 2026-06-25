@@ -11,6 +11,11 @@
                 <ResourceDictionary Source="Strings/en-US.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
+            <!-- Chrome close-button corner. Defined at app scope (not just on MainWindow) so the dialog
+                 windows that borrow the ChromeCloseButton style can resolve it too - otherwise the
+                 DynamicResource is unfound inside a dialog and the red hover box renders square. -->
+            <CornerRadius x:Key="ChromeCloseCorner">0,7,0,0</CornerRadius>
+
             <!-- Global themed tooltip (replaces the plain white system box) -->
             <Style TargetType="ToolTip">
                 <Setter Property="Background" Value="{DynamicResource BgModal}"/>

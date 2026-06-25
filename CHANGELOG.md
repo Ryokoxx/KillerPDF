@@ -4,12 +4,12 @@ All notable changes to KillerPDF are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.8] - 2026-06-23
+## [1.5.8] - 2026-06-24
 
 ### Added
 - Line tool: drag to draw straight lines, with its own color, opacity, and width.
 - Resizable, word-wrapping text boxes (double-click to re-edit) with an optional background fill for whiteouts, color, and opacity.
-- Highlighter bar with color and opacity controls.
+- Updated highlighter and draw bars with color and opacity controls.
 - Select tool moves and resizes any annotation, Shift+click to multi-select, and reopens an annotation's bar to restyle it in place.
 - Full RGB color picker on every swatch row: saturation/value square, hue strip, RGB/hex inputs, a screen eyedropper, and an editable palette.
 - Tabbed documents: open several PDFs at once, each restoring its page, zoom, and view mode. Drag tabs to re-order.
@@ -25,7 +25,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 - Resizable sidebar: drag the splitter to scale the page list and thumbnails; drag to open or close, or toggle with Ctrl+B.
 - Accent colors (red, orange, green, teal, blue, purple) for the Dark, Light, and Black themes, each remembered independently.
 - Keyboard shortcuts for tools and panels (F1 shortcuts list, F2 About, Ctrl+V paste, Esc to close); the overlay lists them all.
-- Bengali, Turkish, Simplified Chinese, German, and French translations (contributors akib-h #79, mrantikadev #76, KaneLeung #82, Dtrieb #93, Thalis-fr #95).
+- Bengali, Turkish, Simplified Chinese, German, and French translations (contributors akib-h #79, mrantikadev #76, KaneLeung #82, Dtrieb & Gevlug #93, Thalis-fr #95).
 
 ### Changed
 - Visual refresh: rounded window corners (squared when maximized), film grain on surfaces and dialogs, drop shadows on icons and menus, themed KillerPDF wordmark, accent-colored radios, per-theme scrollbars, and themed sliders. The floating annotation bars fade, crossfade between tools, and minimize to a dotted strip.

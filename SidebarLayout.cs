@@ -13,18 +13,16 @@ namespace KillerPDF
     {
         private void ApplySidebarSide()
         {
-            var sidebarColDef = FindName("SidebarCol") as ColumnDefinition;
-            var docColDef     = FindName("DocCol") as ColumnDefinition;
-            var sbOuter       = FindName("SidebarOuterGrid") as Grid;
-            var sbContent     = FindName("SidebarBorder") as Border;
-            var sbToggle      = FindName("SidebarToggleStrip") as Border;
-            var docPane       = FindName("DocPaneBorder") as FrameworkElement;
             var tabStrip      = FindName("TabStripBorder") as FrameworkElement;
             var tabScroll     = FindName("TabScroll") as FrameworkElement;
-            var sbContentCol  = FindName("SbContentCol") as ColumnDefinition;
-            var sbToggleCol   = FindName("SbToggleCol") as ColumnDefinition;
-            if (sidebarColDef == null || docColDef == null || sbOuter == null || sbContent == null ||
-                sbToggle == null || docPane == null || sbContentCol == null || sbToggleCol == null)
+            if (FindName("SidebarCol") is not ColumnDefinition sidebarColDef ||
+                FindName("DocCol") is not ColumnDefinition docColDef ||
+                FindName("SidebarOuterGrid") is not Grid sbOuter ||
+                FindName("SidebarBorder") is not Border sbContent ||
+                FindName("SidebarToggleStrip") is not Border sbToggle ||
+                FindName("DocPaneBorder") is not FrameworkElement docPane ||
+                FindName("SbContentCol") is not ColumnDefinition sbContentCol ||
+                FindName("SbToggleCol") is not ColumnDefinition sbToggleCol)
                 return;
 
             // Carry the sized column's current width across a flip (24px when collapsed, else the

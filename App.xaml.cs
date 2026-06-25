@@ -664,6 +664,48 @@ namespace KillerPDF
             catch { /* best-effort */ }
         }
 
+        /// <summary>
+        /// Wipes all persisted KillerPDF state: settings (registry), downloaded OCR language packs, the
+        /// native OCR cache, and temp files. Best-effort - files locked this session (e.g. loaded native
+        /// DLLs) are skipped and clear on the next restart. The user's actual PDFs are never touched.
+        /// </summary>
+        internal static void ClearAllData()
+        {
+            try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\KillerPDF\Settings", throwOnMissingSubKey: false); } catch { }
+
+            string localKp = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KillerPDF");
+            TryDeleteDir(Path.Combine(localKp, "tessdata"));   // downloaded language packs + bundled English
+            TryDeleteDir(Path.Combine(localKp, "ocr"));        // native Tesseract cache
+            TryDeleteDir(TempDir);                              // temp working files
+
+            // Legacy temp PDFs that may linger in %TEMP%.
+            try
+            {
+                foreach (var f in Directory.GetFiles(Path.GetTempPath(), "killerpdf_*.pdf"))
+                    try { File.Delete(f); } catch { }
+            }
+            catch { }
+        }
+
+        private static void TryDeleteDir(string dir)
+        {
+            try
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            }
+            catch
+            {
+                // A whole-folder delete fails if any file is locked; remove what we can so the rest clears now.
+                try
+                {
+                    foreach (var f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                        try { File.Delete(f); } catch { }
+                }
+                catch { }
+            }
+        }
+
         // ── Recent files (most-recent first, capped) ─────────────────────
         private const int RecentFilesMax = 10;
 
@@ -1283,9 +1325,30 @@ namespace KillerPDF
 
             try
             {
-                // Copy EXE to install location
+                // Copy EXE to install location. Two snags make a plain overwrite throw "access denied":
+                // (1) File.Copy carries the source's attributes, so a prior install can leave the target
+                //     read-only - and File.Copy(overwrite:true) throws on a read-only target instead of
+                //     replacing it. Clear the attribute first (and again after, so the next update works).
+                // (2) The installed copy is running, so it's locked. Catch that and say so plainly.
                 Directory.CreateDirectory(InstallDir);
-                File.Copy(src, InstallExe, overwrite: true);
+                if (File.Exists(InstallExe))
+                {
+                    try { File.SetAttributes(InstallExe, FileAttributes.Normal); } catch { }
+                }
+                try
+                {
+                    File.Copy(src, InstallExe, overwrite: true);
+                }
+                catch (Exception copyEx) when (copyEx is UnauthorizedAccessException or IOException)
+                {
+                    MessageBox.Show(
+                        "Couldn't write the installed copy at:\n" + InstallExe +
+                        "\n\nClose any open KillerPDF window (and check Task Manager for KillerPDF.exe), " +
+                        "then run the installer again.",
+                        AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                try { File.SetAttributes(InstallExe, FileAttributes.Normal); } catch { }
 
                 // Shortcuts
                 Directory.CreateDirectory(StartMenuDir);

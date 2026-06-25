@@ -27,7 +27,7 @@ namespace KillerPDF
         // Temp save/reload
         // ============================================================
 
-        private void SaveTempAndReload(bool keepAnnotations = false)
+        private void SaveTempAndReload(bool keepAnnotations = false, bool preserveZoom = false)
         {
             if (_doc is null || _currentFile is null) return;
             // Overlay annotations are unsaved, still-editable user work. Callers that don't change
@@ -42,7 +42,7 @@ namespace KillerPDF
 
             // Capture page rotations, then strip them from the document before saving.
             // Docnet uses FPDF_GetPageWidth/Height (MediaBox, no rotation) to size the bitmap,
-            // then renders with PDFium's page CTM which *does* include /Rotate.  For 90°/270°
+            // then renders with PDFium's page CTM which *does* include /Rotate.  For 90ï¿½/270ï¿½
             // the rendered landscape content overflows the portrait-sized bitmap and gets clipped.
             // Stripping /Rotate to 0 before saving means Docnet renders clean unrotated content
             // that fits the bitmap; RotateBitmap is applied in each render path instead.
@@ -116,15 +116,19 @@ namespace KillerPDF
                 return;
             }
 
-            // Refit synchronously so the first rendered frame uses the correct zoom.
+            // Refit synchronously so the first rendered frame uses the correct zoom. For crop we instead
+            // keep the current zoom (preserveZoom) so the page doesn't jump to fit the smaller cropped size -
+            // the user just wanted the cropped-away area removed, not a zoom change.
             PagePreviewPanel.ScrollToHorizontalOffset(0);
-            ReapplyGridOrFit();
+            if (preserveZoom) { _fitMode = FitMode.None; ApplyZoom(); }
+            else ReapplyGridOrFit();
 
             // Deferred refit after layout settles for accurate ActualWidth.
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, (Action)(() =>
             {
                 PagePreviewPanel.ScrollToHorizontalOffset(0);
-                ReapplyGridOrFit();
+                if (preserveZoom) ApplyZoom();
+                else ReapplyGridOrFit();
             }));
         }
     }

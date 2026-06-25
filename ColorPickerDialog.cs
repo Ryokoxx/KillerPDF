@@ -38,11 +38,11 @@ namespace KillerPDF
         private const string SavedKey = "UserSwatches";
         // First-run / Reset palette: 9 fixed slots, last one white.
         private static readonly Color[] DefaultSwatches =
-        {
+        [
             Color.FromRgb(0xE0, 0x3C, 0x3C), Color.FromRgb(0xE8, 0x7A, 0x1E), Color.FromRgb(0xF2, 0xC0, 0x1E),
             Color.FromRgb(0x2E, 0xA5, 0x4C), Color.FromRgb(0x2E, 0x86, 0xDE), Color.FromRgb(0x8E, 0x5B, 0xD6),
             Color.FromRgb(0xE0, 0x4A, 0x9A), Colors.Black, Colors.White
-        };
+        ];
         private static SolidColorBrush R(string key) => (SolidColorBrush)Application.Current.Resources[key];
         public ColorPickerDialog(Window? owner, Color initial)
         {
@@ -96,9 +96,9 @@ namespace KillerPDF
             {
                 Text = "Pick a color", Foreground = R("Accent"),
                 FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12),
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 2, ShadowDepth = 1, Direction = 270, Opacity = 0.7 }
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 2, ShadowDepth = 1, Direction = 270, Opacity = 0.7 },
+                Cursor = Cursors.SizeAll
             };
-            title.Cursor = Cursors.SizeAll;
             title.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
             panel.Children.Add(title);
             // SV square + hue strip
@@ -109,8 +109,8 @@ namespace KillerPDF
             var svBlack = new Rectangle { Width = SvW, Height = SvH, IsHitTestVisible = false,
                 Fill = new LinearGradientBrush(Color.FromArgb(0, 0, 0, 0), Color.FromArgb(255, 0, 0, 0), 90) };
             _svThumb = new Canvas { Width = SvW, Height = SvH, IsHitTestVisible = false };
-            var svDot = new Ellipse { Width = 12, Height = 12, Stroke = Brushes.White, StrokeThickness = 2, Fill = Brushes.Transparent };
-            svDot.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 2, ShadowDepth = 0, Opacity = 0.8 };
+            var svDot = new Ellipse { Width = 12, Height = 12, Stroke = Brushes.White, StrokeThickness = 2, Fill = Brushes.Transparent,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 2, ShadowDepth = 0, Opacity = 0.8 } };
             _svThumb.Children.Add(svDot);
             var svGrid = new Grid { Width = SvW, Height = SvH };
             svGrid.Children.Add(_svHue); svGrid.Children.Add(svWhite); svGrid.Children.Add(svBlack); svGrid.Children.Add(_svThumb);
@@ -150,9 +150,9 @@ namespace KillerPDF
             {
                 Width = 28, Height = 22, Margin = new Thickness(8, 14, 0, 0),
                 Background = R("BgCanvas"), BorderBrush = R("BorderDim"), BorderThickness = new Thickness(1),
-                Content = CrosshairIcon(), ToolTip = "Pick a color from anywhere on screen", Cursor = Cursors.Cross
+                Content = CrosshairIcon(), ToolTip = "Pick a color from anywhere on screen", Cursor = Cursors.Cross,
+                Template = MakeBtnTemplate()
             };
-            eyedrop.Template = MakeBtnTemplate();
             eyedrop.Click += (_, _) => RunEyedropper();
             inputRow.Children.Add(eyedrop);
             panel.Children.Add(inputRow);
@@ -172,7 +172,7 @@ namespace KillerPDF
             _replaceBtn.MouseLeftButtonUp += (_, _) => { _replaceArmed = !_replaceArmed; UpdateReplaceChip(); RebuildSavedRow(); };
             var resetBtn = Chip("Reset", "Reset swatches to defaults");
             resetBtn.HorizontalAlignment = HorizontalAlignment.Right;
-            resetBtn.MouseLeftButtonUp += (_, _) => { StoreSaved(DefaultSwatches.ToList()); _replaceArmed = false; UpdateReplaceChip(); RebuildSavedRow(); SwatchesChanged?.Invoke(); };
+            resetBtn.MouseLeftButtonUp += (_, _) => { StoreSaved([.. DefaultSwatches]); _replaceArmed = false; UpdateReplaceChip(); RebuildSavedRow(); SwatchesChanged?.Invoke(); };
             swHeader.Children.Add(_replaceBtn);
             swHeader.Children.Add(resetBtn);
             panel.Children.Add(swHeader);
@@ -246,11 +246,11 @@ namespace KillerPDF
         private List<Color> LoadSaved()
         {
             var raw = App.GetSetting(SavedKey);
-            if (string.IsNullOrWhiteSpace(raw)) return new List<Color>(DefaultSwatches);   // first run = defaults
+            if (string.IsNullOrWhiteSpace(raw)) return [.. DefaultSwatches];   // first run = defaults
             var list = new List<Color>();
             foreach (var part in raw!.Split(','))
                 if (TryParseHex(part.Trim(), out Color c)) list.Add(c);
-            return list.Count > 0 ? list : new List<Color>(DefaultSwatches);
+            return list.Count > 0 ? list : [.. DefaultSwatches];
         }
         private void StoreSaved(List<Color> list) =>
             App.SetSetting(SavedKey, string.Join(",", list.Take(SwatchMax).Select(c => $"#{c.R:X2}{c.G:X2}{c.B:X2}")));
@@ -326,9 +326,9 @@ namespace KillerPDF
         {
             var b = new Border { Height = 20, MinWidth = 22, CornerRadius = new CornerRadius(3), Cursor = Cursors.Hand,
                 BorderBrush = R("BorderDim"), BorderThickness = new Thickness(1), Background = R("BgPanel"),
-                Padding = new Thickness(6, 0, 6, 0), ToolTip = tip };
-            b.Child = new TextBlock { Text = text, Foreground = R("TextPrimary"), FontSize = 11,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                Padding = new Thickness(6, 0, 6, 0), ToolTip = tip,
+                Child = new TextBlock { Text = text, Foreground = R("TextPrimary"), FontSize = 11,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } };
             // Unified hover with the Cancel button (greyer fill), respecting Replace's armed highlight.
             b.MouseEnter += (_, _) => { if (b != _replaceBtn || !_replaceArmed) b.Background = R("BorderDim"); };
             b.MouseLeave += (_, _) => { b.Background = (b == _replaceBtn && _replaceArmed) ? R("AccentDim") : R("BgPanel"); };

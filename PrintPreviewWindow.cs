@@ -57,6 +57,7 @@ namespace KillerPDF
 
         private readonly Grid _previewHost = new();
         private readonly TextBlock _pageLabel = new();
+        private readonly TextBlock _renderLabel = new();   // "Rendering X / Y" line shown above the page nav
         private ComboBox _printerCombo = null!;
         private TextBox _copiesBox = null!;
         private TextBox _pagesBox = null!;
@@ -401,73 +402,9 @@ namespace KillerPDF
             Content = outer;
 
             // Title bar (transparent so the dialog-wide grain shows through behind the title)
-            var titleBar = new Border
-            {
-                Background   = Brushes.Transparent,
-                CornerRadius = new CornerRadius(0)
-            };
+            // Shared KillerPDF dialog chrome: wordmark + courier suffix + the red ChromeCloseButton.
+            var titleBar = DialogChrome.BuildTitleBar(this, Owner, S("Str_Print_Title"), () => { DialogResult = false; Close(); });
             DockPanel.SetDock(titleBar, Dock.Top);
-            titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
-
-            var titleGrid = new Grid();
-            titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            // Render the "KillerPDF" part of the title as the app wordmark (Killer + green PDF),
-            // matching the main window and dialog title bars; the rest (e.g. " - Print") stays muted.
-            FrameworkElement titleText;
-            string printTitle = S("Str_Print_Title");
-            int kpIdx = printTitle.IndexOf("KillerPDF", StringComparison.Ordinal);
-            if (kpIdx >= 0)
-            {
-                var wm = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Margin = new Thickness(16, 0, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 }
-                };
-                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary"), VerticalAlignment = VerticalAlignment.Center });
-                wm.Children.Add(new TextBlock { Text = "PDF",    FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo"), VerticalAlignment = VerticalAlignment.Center });
-                string after = printTitle[(kpIdx + "KillerPDF".Length)..];
-                if (!string.IsNullOrEmpty(after))
-                    wm.Children.Add(new TextBlock { Text = after, FontFamily = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontSize = 13, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
-                titleText = wm;
-            }
-            else
-            {
-                titleText = new TextBlock
-                {
-                    Text       = printTitle,
-                    Foreground = R("Accent"),
-                    FontWeight = FontWeights.SemiBold,
-                    FontSize   = 13,
-                    FontFamily = new FontFamily("Consolas"),
-                    Margin     = new Thickness(16, 0, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-            }
-            Grid.SetColumn(titleText, 0);
-
-            // Match the main window's chrome close button: Segoe MDL2 close glyph,
-            // red normally, white-on-red on hover (and white on the Blood theme).
-            var closeBtn = new Button { Content = CloseGlyph };
-            if (FindOwnerStyle("ChromeCloseButton") is Style chromeClose)
-            {
-                closeBtn.Style = chromeClose;
-            }
-            else
-            {
-                closeBtn = MakeButton(CloseGlyph, false);
-                closeBtn.FontFamily = new FontFamily("Segoe MDL2 Assets");
-                closeBtn.FontSize   = 10;
-                closeBtn.Foreground = R("DangerRed");
-            }
-            closeBtn.Click += (_, _) => { DialogResult = false; Close(); };
-            Grid.SetColumn(closeBtn, 1);
-
-            titleGrid.Children.Add(titleText);
-            titleGrid.Children.Add(closeBtn);
-            titleBar.Child = titleGrid;
             root.Children.Add(titleBar);
 
             // Body: settings | preview
@@ -756,8 +693,7 @@ namespace KillerPDF
             var nav = new StackPanel
             {
                 Orientation         = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin              = new Thickness(0, 6, 0, 8)
+                HorizontalAlignment = HorizontalAlignment.Center
             };
             var prev = MakeButton("◀", false);   // left triangle
             prev.Click += (_, _) => { if (_previewIndex > 0) { _previewIndex--; UpdatePreview(); } };
@@ -770,8 +706,19 @@ namespace KillerPDF
             nav.Children.Add(prev);
             nav.Children.Add(_pageLabel);
             nav.Children.Add(next);
-            Grid.SetRow(nav, 1);
-            grid.Children.Add(nav);
+
+            // "Rendering X / Y" gets its own line above the page nav while pages stream in.
+            _renderLabel.Foreground = R("TextSecondary");
+            _renderLabel.HorizontalAlignment = HorizontalAlignment.Center;
+            _renderLabel.FontSize = 11;
+            _renderLabel.Margin = new Thickness(0, 0, 0, 2);
+            _renderLabel.Visibility = Visibility.Collapsed;
+
+            var navColumn = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 8) };
+            navColumn.Children.Add(_renderLabel);
+            navColumn.Children.Add(nav);
+            Grid.SetRow(navColumn, 1);
+            grid.Children.Add(navColumn);
 
             // Film grain over the preview canvas, behind the page so it textures the margins
             // around the sheet rather than the document itself.
@@ -782,7 +729,7 @@ namespace KillerPDF
                 Grid.SetRowSpan(previewGrain, 2);   // also texture the page-counter row so it isn't a flat gray bar
                 Panel.SetZIndex(previewGrain, 0);
                 Panel.SetZIndex(_previewHost, 1);
-                Panel.SetZIndex(nav, 1);             // keep the counter and arrows above the grain
+                Panel.SetZIndex(navColumn, 1);       // keep the counter and arrows above the grain
                 grid.Children.Add(previewGrain);
             }
 
@@ -857,7 +804,7 @@ namespace KillerPDF
         private void UpdatePreview()
         {
             _previewHost.Children.Clear();
-            if (_pages.Length == 0) { _pageLabel.Text = S("Str_Print_NoPages"); return; }
+            if (_pages.Length == 0) { _pageLabel.Text = S("Str_Print_NoPages"); _renderLabel.Visibility = Visibility.Collapsed; return; }
 
             int sheets = SheetCount();
             int sheet = Math.Max(0, Math.Min(_previewIndex, sheets - 1));
@@ -868,11 +815,17 @@ namespace KillerPDF
             for (int i = sheet * _nUp; i < Math.Min(_pages.Length, sheet * _nUp + _nUp); i++)
                 idxs.Add(i);
 
+            // Page/sheet nav label is always shown; the "Rendering X / Y" line above it appears only while
+            // pages are still streaming in.
+            _pageLabel.Text = _nUp > 1
+                ? $"Sheet {sheet + 1} of {sheets}"
+                : string.Format(S("Str_PageOf"), sheet + 1, _pages.Length);
+            UpdateRenderLabel();
+
             // If any page on this sheet hasn't rendered yet, show a spinner instead of composing.
             if (idxs.Any(i => _pages[i] is null))
             {
                 _previewHost.Children.Add(BuildLoadingIndicator());
-                _pageLabel.Text = $"Rendering {_loadedCount} / {_pages.Length}";
                 return;
             }
 
@@ -884,10 +837,17 @@ namespace KillerPDF
                 Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 14, ShadowDepth = 3, Direction = 270, Opacity = 0.5 }
             };
             _previewHost.Children.Add(vb);
+        }
 
-            _pageLabel.Text = _nUp > 1
-                ? $"Sheet {sheet + 1} of {sheets}"
-                : string.Format(S("Str_PageOf"), sheet + 1, _pages.Length);
+        // Shows/hides the "Rendering X / Y" line above the page nav based on load state.
+        private void UpdateRenderLabel()
+        {
+            if (_isLoading)
+            {
+                _renderLabel.Text = $"Rendering {_loadedCount} / {_pages.Length}";
+                _renderLabel.Visibility = Visibility.Visible;
+            }
+            else _renderLabel.Visibility = Visibility.Collapsed;
         }
 
         // Called (on the UI thread) by the background renderer as each page finishes.
@@ -904,7 +864,7 @@ namespace KillerPDF
             if (onCurrentSheet)
                 UpdatePreview();                 // reveal the page (or keep spinner if sheet incomplete)
             else if (_isLoading)
-                _pageLabel.Text = $"Rendering {_loadedCount} / {_pages.Length}";
+                UpdateRenderLabel();
         }
 
         // Called once every page has rendered: enables Print and finalizes the preview.

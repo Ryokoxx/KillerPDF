@@ -123,6 +123,24 @@ namespace KillerPDF
             FadeOverlayOut(AboutOverlay);
         }
 
+        // "Clear all Data" footer link: wipes settings, downloaded OCR language packs, and temp files after
+        // an explicit confirmation. Destructive, so it always warns first; the user's PDFs are untouched.
+        private void AboutClearData_Click(object sender, RoutedEventArgs e)
+        {
+            var res = KillerDialog.Show(this,
+                "This will delete all saved settings, downloaded OCR language packs, and temporary files.\n\n" +
+                "Your PDF files are not affected. Continue?",
+                "Clear all Data", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (res != MessageBoxResult.Yes) return;
+
+            App.ClearAllData();
+            SetStatus("All KillerPDF data cleared");
+            KillerDialog.Show(this,
+                "Settings, language packs, and temp files were cleared.\n\n" +
+                "Restart KillerPDF to finish clearing any files still in use this session.",
+                "Clear all Data", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         // Quietly checks GitHub for a newer release when the About dialog opens. Runs only on
         // demand (no background service), times out fast, and silently does nothing if there is
         // no internet or the request fails. Shows the update button only if a newer tag exists.

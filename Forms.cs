@@ -655,9 +655,8 @@ namespace KillerPDF
         /// Generates /AP /N (checked) and /AP /Off (unchecked) appearance streams for a
         /// checkbox widget and sets them on the annotation.
         /// </summary>
-#pragma warning disable IDE0060 // isChecked unused - both AP states are always generated; /AS selects the active one
+        // isChecked unused - both AP states are always generated; /AS selects the active one
         private void GenerateCheckBoxAppearance(PdfDictionary widgetAnn, bool isChecked, string onVal, double fieldW, double fieldH)
-#pragma warning restore IDE0060
         {
             try
             {

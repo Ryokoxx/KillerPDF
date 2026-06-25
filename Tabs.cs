@@ -115,7 +115,7 @@ namespace KillerPDF
                 {
                     if (line.Length == 0) continue;
                     int bar = line.IndexOf('|');
-                    string lpath = bar > 0 ? line.Substring(0, bar) : line;
+                    string lpath = bar > 0 ? line[..bar] : line;
                     if (!string.Equals(lpath, path, StringComparison.OrdinalIgnoreCase))
                         lines.Add(line);
                 }

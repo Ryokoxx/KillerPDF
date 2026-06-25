@@ -295,9 +295,9 @@ namespace KillerPDF
             {
                 Text = Loc("Str_Sig_Title"),
                 Foreground = (SolidColorBrush)FindResource("Accent"),   // accent heading, shared secondary-window style
-                FontFamily = new FontFamily("Segoe UI"),
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 13,
+                FontFamily = new FontFamily("Consolas"),
+                FontWeight = FontWeights.Bold,
+                FontSize = 14,
                 Margin = new Thickness(4, 2, 4, 2),
                 VerticalAlignment = VerticalAlignment.Center,
                 Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 2, ShadowDepth = 1, Direction = 270, Opacity = 0.7 }

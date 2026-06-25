@@ -90,8 +90,8 @@ namespace KillerPDF
             if (title == "KillerPDF")
             {
                 var wm = new StackPanel { Orientation = Orientation.Horizontal };
-                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary") });
-                wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo") });
+                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("TextPrimary") });
+                wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = new System.Windows.Media.FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI"), FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("AccentLogo") });
                 wm.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 };
                 titleBar.Child = wm;
             }
@@ -101,8 +101,8 @@ namespace KillerPDF
                 {
                     Text = title,
                     Foreground = R("Accent"),
-                    FontWeight = FontWeights.SemiBold,
-                    FontSize = 13,
+                    FontWeight = FontWeights.Bold,   // blue title -> bold
+                    FontSize = 14,
                     FontFamily = new System.Windows.Media.FontFamily("Consolas")
                 };
             }
@@ -193,6 +193,125 @@ namespace KillerPDF
             win.Content = outerBorder;
             win.ShowDialog();
             return result;
+        }
+
+        /// <summary>
+        /// Like <see cref="Show"/> but with a "don't warn again" style checkbox between the message and the
+        /// buttons. Returns the button result and the checkbox state.
+        /// </summary>
+        public static (MessageBoxResult result, bool isChecked) ShowWithCheckbox(
+            Window? owner,
+            string message,
+            string checkboxText,
+            string title = "KillerPDF",
+            MessageBoxButton buttons = MessageBoxButton.OKCancel)
+        {
+            var result = MessageBoxResult.Cancel;
+            bool boxChecked = false;
+
+            var win = new Window
+            {
+                Title = title,
+                Width = 400,
+                SizeToContent = SizeToContent.Height,
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
+                Owner = owner,
+                ResizeMode = ResizeMode.NoResize
+            };
+            WindowFx.EnableFadeClose(win);
+            TextOptions.SetTextFormattingMode(win, TextFormattingMode.Display);
+            TextOptions.SetTextRenderingMode(win, TextRenderingMode.Grayscale);
+
+            var outerBorder = new Border
+            {
+                Background = R("BgModal"),
+                BorderBrush = R("AccentBorder"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(10),
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                { Color = Colors.Black, BlurRadius = 18, ShadowDepth = 3, Direction = 270, Opacity = 0.6 }
+            };
+
+            var root = new StackPanel();
+
+            var titleBar = new Border { Background = Brushes.Transparent, Padding = new Thickness(16, 10, 16, 10) };
+            titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
+            titleBar.Child = new TextBlock
+            {
+                Text = title,
+                Foreground = R("Accent"),
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 13,
+                FontFamily = new FontFamily("Consolas")
+            };
+            root.Children.Add(titleBar);
+
+            root.Children.Add(new Border
+            {
+                Padding = new Thickness(20, 4, 20, 8),
+                Child = new TextBlock { Text = message, Foreground = R("TextPrimary"), FontSize = 13, TextWrapping = TextWrapping.Wrap }
+            });
+
+            var chk = new CheckBox
+            {
+                Content = checkboxText,
+                Foreground = R("TextSecondary"),
+                FontSize = 12,
+                Margin = new Thickness(20, 2, 20, 4)
+            };
+            chk.Checked += (_, _2) => boxChecked = true;
+            chk.Unchecked += (_, _2) => boxChecked = false;
+            root.Children.Add(chk);
+
+            var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            Button MakeBtn(string label, MessageBoxResult res, bool accent = false)
+            {
+                var btn = UiButtons.Make(label, accent);
+                btn.Margin = new Thickness(8, 0, 0, 0);
+                btn.Click += (_, _2) => { result = res; win.Close(); };
+                return btn;
+            }
+            if (buttons == MessageBoxButton.YesNo)
+            {
+                btnPanel.Children.Add(MakeBtn("Yes", MessageBoxResult.Yes, accent: true));
+                btnPanel.Children.Add(MakeBtn("No", MessageBoxResult.No));
+            }
+            else
+            {
+                btnPanel.Children.Add(MakeBtn("OK", MessageBoxResult.OK, accent: true));
+                btnPanel.Children.Add(MakeBtn("Cancel", MessageBoxResult.Cancel));
+            }
+            root.Children.Add(new Border { Padding = new Thickness(16, 8, 16, 16), Child = btnPanel });
+
+            var contentGrid = new Grid();
+            var grain = (owner as MainWindow)?.GrainTexture;
+            if (grain is not null)
+            {
+                double grainOpacity = Application.Current.Resources["GrainOpacity"] is double go ? go : 0.05;
+                contentGrid.Children.Add(new Border
+                {
+                    CornerRadius = new CornerRadius(6),
+                    IsHitTestVisible = false,
+                    Opacity = grainOpacity,
+                    Background = new ImageBrush(grain)
+                    {
+                        TileMode = TileMode.Tile,
+                        ViewportUnits = BrushMappingMode.Absolute,
+                        Viewport = new Rect(0, 0, 256, 256),
+                        Stretch = Stretch.None
+                    }
+                });
+            }
+            contentGrid.Children.Add(root);
+            outerBorder.Child = contentGrid;
+
+            win.Content = outerBorder;
+            win.ShowDialog();
+            return (result, boxChecked);
         }
     }
 }

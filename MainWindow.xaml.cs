@@ -172,16 +172,16 @@ namespace KillerPDF
         private readonly List<System.Windows.Shapes.Path> _cropBrackets = []; // L-bracket corner visuals
         private Border? _cropConfirmBar;
         private readonly Button _toolCropBtn = null!;
+        private readonly Button _toolRotateBtn = null!;
         private readonly List<Rectangle> _cropHandles = [];
         private string? _activeCropHandleTag; // "NW" | "NE" | "SE" | "SW"
         private Point _cropHandleDragStart;
         private Rect _cropRectAtHandleDrag;
         private int _cropPageIndex = -1;   // page the crop rect was drawn on (grid/two-page aware)
-        private TextBox? _cropX1Box, _cropY1Box, _cropX2Box, _cropY2Box;
+        private TextBox? _cropXBox, _cropYBox, _cropWBox, _cropHBox;   // GIMP-style: top-left X/Y + width/height
         private TextBox? _cropRangeBox;
+        private string   _cropUnit = "pt";   // crop coordinate display unit: "pt" | "in" | "%"
         private bool     _updatingCropInputs;
-        private bool     _cropBarDragging;
-        private Point    _cropBarDragOffset;
 
         // PDF link overlays (rendered on top of the annotation canvas)
         private readonly List<Canvas> _linkOverlays = [];
@@ -288,6 +288,7 @@ namespace KillerPDF
             _toolSignatureBtn = (Button)FindName("ToolSignatureBtn")!;
             _toolImageBtn = (Button)FindName("ToolImageBtn")!;
             _toolCropBtn = (Button)FindName("ToolCropBtn")!;
+            _toolRotateBtn = (Button)FindName("ToolRotateBtn")!;
             _sidebarToggleBtn = (Button)FindName("SidebarToggleBtn")!;
             _sidebarBorder = (Border)FindName("SidebarBorder")!;
             _sidebarCol = (ColumnDefinition)FindName("SidebarCol")!;

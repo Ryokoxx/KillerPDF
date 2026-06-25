@@ -330,8 +330,8 @@ namespace KillerPDF
                 // Flatten every match into one reading-ordered list (page asc, then top-to-bottom,
                 // then left-to-right) so navigation steps word-by-word across the whole document.
                 foreach (var page in _searchResultPages)
-                    foreach (var rc in _allSearchRects[page].OrderByDescending(r => r.top).ThenBy(r => r.left))
-                        _searchMatches.Add((page, rc.left, rc.bottom, rc.right, rc.top));
+                    foreach (var (left, bottom, right, top) in _allSearchRects[page].OrderByDescending(r => r.top).ThenBy(r => r.left))
+                        _searchMatches.Add((page, left, bottom, right, top));
 
                 if (_searchMatches.Count == 0)
                 {

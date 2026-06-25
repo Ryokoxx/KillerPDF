@@ -1152,11 +1152,13 @@ namespace KillerPDF
 
                 case EditTool.Crop:
                     ClearSelection();
-                    HideCropConfirmBar();
                     _isDrawing = true;
                     _drawStart = pos;
                     _cropPageIndex = _activeCanvas.Tag is int cpi ? cpi : (_viewMode == ViewMode.Grid ? 0 : PageList.SelectedIndex);
-                    _cropPreviewRect = new Rectangle
+                    // Draw the NEW box as a separate rect (above the existing one). The current box, its
+                    // handles, and the bar all stay put until this draw is committed on mouse-up - so a
+                    // mouse-down never makes the box or the bar vanish.
+                    var cropDrawRect = new Rectangle
                     {
                         Stroke          = Brushes.White,
                         StrokeThickness = 1.5,
@@ -1167,11 +1169,11 @@ namespace KillerPDF
                         Effect = new System.Windows.Media.Effects.DropShadowEffect
                             { Color = Colors.Black, ShadowDepth = 0, BlurRadius = 3, Opacity = 0.7 },
                     };
-                    Canvas.SetLeft(_cropPreviewRect, pos.X);
-                    Canvas.SetTop(_cropPreviewRect, pos.Y);
-                    Panel.SetZIndex(_cropPreviewRect, 1); // handles sit at ZIndex 10
-                    _activeCanvas.Children.Add(_cropPreviewRect);
-                    _activePreview = _cropPreviewRect;
+                    Canvas.SetLeft(cropDrawRect, pos.X);
+                    Canvas.SetTop(cropDrawRect, pos.Y);
+                    Panel.SetZIndex(cropDrawRect, 2); // above the existing box
+                    _activeCanvas.Children.Add(cropDrawRect);
+                    _activePreview = cropDrawRect;
                     _activeCanvas.CaptureMouse();
                     break;
             }
@@ -1522,6 +1524,9 @@ namespace KillerPDF
                     Canvas.SetTop(crect, Math.Min(pos.Y, _drawStart.Y));
                     crect.Width = Math.Abs(pos.X - _drawStart.X);
                     crect.Height = Math.Abs(pos.Y - _drawStart.Y);
+                    // Live-update the bar's X/Y/W/H as the box is dragged out.
+                    _cropCanvasRect = new Rect(Canvas.GetLeft(crect), Canvas.GetTop(crect), crect.Width, crect.Height);
+                    SyncCropBoxInputs();
                     break;
             }
         }
@@ -1833,17 +1838,28 @@ namespace KillerPDF
                     _activeCanvas?.ReleaseMouseCapture(); // MUST release before showing handles
                     if (cr.Width > 10 && cr.Height > 10)
                     {
+                        // Commit the new box: drop the previous one and promote the drawn rect.
+                        if (_cropPreviewRect is not null && !ReferenceEquals(_cropPreviewRect, cr))
+                            (_cropPreviewRect.Parent as Panel)?.Children.Remove(_cropPreviewRect);
+                        _cropPreviewRect = cr;
                         _cropCanvasRect = new Rect(Canvas.GetLeft(cr), Canvas.GetTop(cr), cr.Width, cr.Height);
                         _activePreview = null;
-                        if (_cropPreviewRect is not null)
-                            Panel.SetZIndex(_cropPreviewRect, 1); // below handles (ZIndex 10)
+                        Panel.SetZIndex(_cropPreviewRect, 1); // below handles (ZIndex 10)
                         ShowCropConfirmBar();
                         return;
                     }
                     else
                     {
+                        // A click without a real drag: discard the tiny drawn rect, keep the existing box,
+                        // and restore the fields to it.
                         _activeCanvas?.Children.Remove(cr);
-                        _cropPreviewRect = null;
+                        _activePreview = null;
+                        if (_cropPreviewRect is not null)
+                        {
+                            _cropCanvasRect = new Rect(Canvas.GetLeft(_cropPreviewRect), Canvas.GetTop(_cropPreviewRect),
+                                                       _cropPreviewRect.Width, _cropPreviewRect.Height);
+                            SyncCropBoxInputs();
+                        }
                     }
                     break;
             }
@@ -1948,7 +1964,7 @@ namespace KillerPDF
                         if (CloneAnnotation(h) is HighlightAnnotation carved)
                         {
                             carved.Erases ??= [];
-                            carved.Erases.Add(new HighlightErase { Points = new List<Point>(brushPath), Radius = brushRadius });
+                            carved.Erases.Add(new HighlightErase { Points = [..brushPath], Radius = brushRadius });
                             result.Add(carved);
                         }
                         break;
@@ -2423,23 +2439,37 @@ namespace KillerPDF
             SetStatus($"Cleared all annotations ({total})");
         }
 
-        private void DrawAnnotationsOnDocument()
+        // onlyPage: when set, burns just that one page's annotations (used by Transform, which rasterizes a
+        // single page and wants its annotations baked in). Default null burns every page, as before.
+        private void DrawAnnotationsOnDocument(int? onlyPage = null)
+            => DrawAnnotationsIntoDoc(_doc, _annotations, _renderDims, onlyPage);
+
+        // Burns annotations into the given document using only the supplied annotation + render-dim data and
+        // nothing from the live UI state (static, so the compiler guarantees it). This makes it safe to run on
+        // a background thread against a throwaway copy of the document - the print flow uses that to keep the
+        // UI responsive while annotated pages are flattened.
+        private static void DrawAnnotationsIntoDoc(
+            PdfDocument? doc,
+            IReadOnlyDictionary<int, List<PageAnnotation>> annotations,
+            IReadOnlyDictionary<int, (int w, int h)> renderDims,
+            int? onlyPage = null)
         {
-            if (_doc is null) return;
+            if (doc is null) return;
 
             // Strip link annotation borders so they don't render as colored rectangles
             // (e.g. strikethrough-like lines) in other PDF viewers.
-            StripLinkAnnotationBorders(_doc);
+            StripLinkAnnotationBorders(doc);
 
-            foreach (var kvp in _annotations)
+            foreach (var kvp in annotations)
             {
                 int pageIdx = kvp.Key;
+                if (onlyPage.HasValue && pageIdx != onlyPage.Value) continue;
                 var annots = kvp.Value;
-                if (annots.Count == 0 || pageIdx >= _doc.PageCount) continue;
-                if (!_renderDims.ContainsKey(pageIdx)) continue;
+                if (annots.Count == 0 || pageIdx >= doc.PageCount) continue;
+                if (!renderDims.ContainsKey(pageIdx)) continue;
 
-                var page = _doc.Pages[pageIdx];
-                var (renderW, renderH) = _renderDims[pageIdx];
+                var page = doc.Pages[pageIdx];
+                var (renderW, renderH) = renderDims[pageIdx];
                 double sx = page.Width.Point / renderW;
                 double sy = page.Height.Point / renderH;
 
@@ -2499,7 +2529,7 @@ namespace KillerPDF
                                     foreach (var seg in fig.Segments)
                                         if (seg is PolyLineSegment pls) foreach (var p in pls.Points) poly.Add(new XPoint(p.X * sx, p.Y * sy));
                                         else if (seg is LineSegment ls) poly.Add(new XPoint(ls.Point.X * sx, ls.Point.Y * sy));
-                                    if (poly.Count >= 3) hpath.AddPolygon(poly.ToArray());
+                                    if (poly.Count >= 3) hpath.AddPolygon([.. poly]);
                                 }
                                 hpath.FillMode = XFillMode.Winding;
                                 gfx.DrawPath(hBrush, hpath);

@@ -490,6 +490,7 @@ namespace KillerPDF
             // otherwise the window froze (hourglass, no feedback) for the whole repair. Only the
             // file production runs off-thread; opening/rendering the result stays on the UI thread.
             _asyncOpenPending = true;   // the synchronous open caller defers tab finalization to here
+            var ct = BeginCancellableOp("repair");
             var busy = ShowBusyOverlay("Repairing PDF...");
             try
             {
@@ -503,6 +504,7 @@ namespace KillerPDF
                 // Works when the XRef is partially corrupt but the object data is intact. (Returns
                 // null on failure rather than throwing.)
                 repairedPath = await System.Threading.Tasks.Task.Run(() => RepairViaImportToFile(path));
+                if (ct.IsCancellationRequested) { HideBusyOverlay(busy); _asyncOpenPending = false; SetStatus("Repair cancelled"); return; }   // cancelled during strategy 1
 
                 // Strategy 2: PDFium rasterize. PDFium's internal XRef recovery handles damage
                 // PdfSharpCore cannot; each page is rendered to a bitmap and rebuilt into a clean PDF.
@@ -512,6 +514,7 @@ namespace KillerPDF
                     repairedPath = await System.Threading.Tasks.Task.Run(() => RepairViaDocnetRasterizeToFile(path));
                     raster = repairedPath is not null;
                 }
+                if (ct.IsCancellationRequested) { HideBusyOverlay(busy); _asyncOpenPending = false; SetStatus("Repair cancelled"); return; }   // cancelled during strategy 2
 
                 if (repairedPath is null)
                 {
@@ -545,6 +548,10 @@ namespace KillerPDF
                 KillerDialog.Show(this, $"Repair failed:\n{ex.Message}", "KillerPDF",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
+            finally
+            {
+                EndCancellableOp();
+            }
         }
 
         // Strips a PDF's encryption on a background thread (so the window doesn't freeze), then opens the
@@ -552,6 +559,7 @@ namespace KillerPDF
         private async void StripEncryptionAndOpen(string srcPath, string displayPath, bool markDirty = true, string busyMessage = "Opening PDF...")
         {
             _asyncOpenPending = true;
+            var ct = BeginCancellableOp("operation");
             var busy = ShowBusyOverlay(busyMessage);
             try
             {
@@ -559,10 +567,11 @@ namespace KillerPDF
                 var repairedPath = App.MakeTempFile("repaired");
                 bool ok = await System.Threading.Tasks.Task.Run(() =>
                     TryPdfiumStripEncryption(srcPath, repairedPath) || TryImportRepairToPath(srcPath, repairedPath));
+                if (ct.IsCancellationRequested) { HideBusyOverlay(busy); _asyncOpenPending = false; SetStatus("Cancelled"); EndCancellableOp(); return; }
                 if (!ok)
                 {
                     HideBusyOverlay(busy);
-                    TryRepairAndOpen(srcPath);   // keeps _asyncOpenPending set; repair finalizes the tab
+                    TryRepairAndOpen(srcPath);   // re-registers the cancellable op; repair finalizes the tab
                     return;
                 }
                 _doc = PdfReader.Open(repairedPath, PdfDocumentOpenMode.Modify);
@@ -571,6 +580,7 @@ namespace KillerPDF
                 if (markDirty) MarkDirty(true);   // stripped copy lives in temp - user must Save As to keep it
                 HideBusyOverlay(busy);
                 FinalizeAsyncOpen();
+                EndCancellableOp();
             }
             catch (Exception ex)
             {
@@ -578,6 +588,7 @@ namespace KillerPDF
                 _asyncOpenPending = false;
                 KillerDialog.Show(this, $"Could not open the protected PDF:\n{ex.Message}",
                     "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+                EndCancellableOp();
             }
         }
 
@@ -1406,6 +1417,7 @@ namespace KillerPDF
 
             try
             {
+                var ct = BeginCancellableOp("flatten");
                 // Rasterize on a background thread - keeps the UI responsive
                 await Task.Run(() =>
                 {
@@ -1425,6 +1437,7 @@ namespace KillerPDF
                     using var flattenReader = DocLib.Instance.GetDocReader(sourcePath, new PageDimensions(150.0 / 72.0));
                     Parallel.For(0, pageCount, po, i =>
                     {
+                        if (ct.IsCancellationRequested) return;   // cooperative: skip remaining pages' work
                         byte[] bgra; int rw, rh;
                         lock (docGate)
                         {
@@ -1439,6 +1452,8 @@ namespace KillerPDF
                         int n = System.Threading.Interlocked.Increment(ref done);
                         Dispatcher.BeginInvoke(new Action(() => UpdateFlattenProgress(overlay, n, pageCount)));
                     });
+
+                    if (ct.IsCancellationRequested) return;   // cancelled during render: assemble/save nothing
 
                     // Assemble the output PDF in page order (PdfSharp is single-threaded).
                     var outDoc = new PdfDocument();
@@ -1461,6 +1476,7 @@ namespace KillerPDF
                     }
                 });
 
+                if (ct.IsCancellationRequested) { SetStatus("Flatten cancelled (no file written)"); return; }
                 MarkDirty(false);
                 SetStatus($"Flattened PDF saved to {System.IO.Path.GetFileName(outputPath)}");
             }
@@ -1472,6 +1488,7 @@ namespace KillerPDF
             finally
             {
                 try { HideFlattenProgress(overlay); } catch { /* ensure overlay never leaks */ }
+                EndCancellableOp();
             }
         }
 
@@ -1530,50 +1547,78 @@ namespace KillerPDF
             if (_doc is null || _currentFile is null) { KillerDialog.Show(this, "Open a PDF first."); return; }
             CommitActiveTextBox();
 
-            // Burn pending annotations into a temp copy on the UI thread before going off-thread
+            // The print prep (annotation burn + doc reopen) runs synchronously on the UI thread and freezes
+            // it for a moment. If Settings is open, close it and wait for the slide to finish before that
+            // freeze, so the animation stays smooth; otherwise just yield one render cycle to keep the click
+            // responsive. (Deeper fix - backgrounding the burn - is tracked separately.)
+            if (SettingsOverlay?.Visibility == Visibility.Visible)
+            {
+                SlideSettingsClosed();
+                var settleTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(190) };
+                settleTimer.Tick += (_, _2) => { settleTimer.Stop(); RunPrintFlow(); };
+                settleTimer.Start();
+            }
+            else
+            {
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(RunPrintFlow));
+            }
+        }
+
+        private async void RunPrintFlow()
+        {
+            if (_doc is null || _currentFile is null) return;
+            string srcFile = _currentFile;
+
             bool hasAnnotations = _annotations.Values.Any(list => list.Count > 0);
             string printPath;
             string? tempFlattened = null;
             if (hasAnnotations)
             {
                 var tempClean = App.MakeTempFile("clean");
-                _doc.Save(tempClean);
-                // The source PDF may have opened read-only (owner-password or non-standard-xref
-                // fallbacks), and XGraphics can't draw on a non-modifiable doc - that crashed the
-                // print flow. Reopen the clean snapshot in Modify and burn the annotations onto that
-                // throwaway copy; the live doc is reopened clean again below, so the burn never
-                // persists in the editing session.
-                _doc.Close();
-                try
+                _doc.Save(tempClean);   // UI-thread snapshot of the current doc (just serialization)
+                // Snapshot the data the burn needs so the background thread reads no live UI state.
+                var annotsSnap = _annotations.ToDictionary(kv => kv.Key, kv => new List<PageAnnotation>(kv.Value));
+                var dimsSnap   = new Dictionary<int, (int w, int h)>(_renderDims);
+                var burnPath   = App.MakeTempFile("print");
+
+                // Flatten the annotations onto a throwaway COPY on a background thread. The live _doc is never
+                // touched (no close/reopen), so the UI stays responsive and the editing session keeps its
+                // overlay annotations. DrawAnnotationsIntoDoc is static, so it can't reach UI state.
+                bool burned = await Task.Run(() =>
                 {
-                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
-                }
-                catch (Exception printOpenEx) when (IsXRefException(printOpenEx))
-                {
-                    // PdfSharpCore can write a snapshot whose xref offset confuses its own reader
-                    // ("Unexpected token 'xref'"). Repair via Import then PDFium, same as save/undo,
-                    // instead of crashing the print flow.
-                    var fixedPath = App.MakeTempFile("printfixed");
-                    if (!TryImportRepairToPath(tempClean, fixedPath)
-                        && !TryPdfiumSaveWithZeroRotations(tempClean, fixedPath))
-                        throw;
-                    tempClean = fixedPath;
-                    _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
-                }
-                DrawAnnotationsOnDocument();
-                printPath = App.MakeTempFile("print");
-                _doc.Save(printPath);
-                tempFlattened = printPath;
-                // Reopen a fresh clean copy so the live doc keeps annotations as editable overlays.
-                _doc.Close();
-                _doc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify);
-                _currentFile = tempClean;
+                    try
+                    {
+                        PdfDocument burnDoc;
+                        try { burnDoc = PdfReader.Open(tempClean, PdfDocumentOpenMode.Modify); }
+                        catch (Exception ex) when (IsXRefException(ex))
+                        {
+                            // PdfSharpCore can write a snapshot its own reader then chokes on; repair via
+                            // Import then PDFium, same as the save/undo paths.
+                            var fixedPath = App.MakeTempFile("printfixed");
+                            if (!TryImportRepairToPath(tempClean, fixedPath) && !TryPdfiumSaveWithZeroRotations(tempClean, fixedPath))
+                                return false;
+                            burnDoc = PdfReader.Open(fixedPath, PdfDocumentOpenMode.Modify);
+                        }
+                        using (burnDoc)
+                        {
+                            DrawAnnotationsIntoDoc(burnDoc, annotsSnap, dimsSnap);
+                            burnDoc.Save(burnPath);
+                        }
+                        return true;
+                    }
+                    catch { return false; }
+                });
+
+                if (!burned) SetStatus("Could not flatten annotations for printing; printing without them.");
+                printPath     = burned ? burnPath : srcFile;
+                tempFlattened = burned ? burnPath : null;
             }
             else
             {
-                printPath = _currentFile;
+                printPath = srcFile;
             }
 
+            if (_doc is null) return;   // re-check after the await (the doc was untouched, this satisfies flow analysis)
             int pageCount = _doc.PageCount;
 
             // Each page's true physical size in DIPs (96/inch) so the dialog can offer an exact

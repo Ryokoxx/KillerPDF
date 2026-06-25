@@ -196,6 +196,7 @@ namespace KillerPDF
             if (hasTextSel)
                 _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_CopyText"), (s, e) => CopySelectedText(), "Ctrl+C"));
             _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_Print"), (s, e) => Print_Click(s!, e), "Ctrl+P"));
+            _ctxMenu.Items.Add(MakeMenuItem(Loc("Str_Ctx_OcrPage"), (s, e) => OcrPageToClipboard(pageIdx)));
             _ctxMenu.Items.Add(new Separator());
 
             // Placement actions - drop the item exactly where the user right-clicked (Select / Highlight /
@@ -334,7 +335,7 @@ namespace KillerPDF
                 ColorG = h.ColorG,
                 ColorB = h.ColorB,
                 ColorA = h.ColorA,
-                Erases = h.Erases?.Select(e => new HighlightErase { Points = new List<Point>(e.Points), Radius = e.Radius }).ToList()
+                Erases = h.Erases?.Select(e => new HighlightErase { Points = [.. e.Points], Radius = e.Radius }).ToList()
             },
             TextAnnotation t => new TextAnnotation
             {

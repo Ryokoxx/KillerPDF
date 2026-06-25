@@ -150,10 +150,11 @@ namespace KillerPDF
         {
             _cropPageIndex = _activeCanvas.Tag is int cpi ? cpi : (_viewMode == ViewMode.Grid ? 0 : PageList.SelectedIndex);
             ClearSelection();
-            HideCropConfirmBar();
             _isDrawing = true;
             _drawStart = pos;
-            _cropPreviewRect = new Rectangle
+            // Draw the NEW box as a separate rect; the existing box, handles, and bar stay put until this
+            // draw is committed on mouse-up (so a mouse-down never wipes the current box or bar).
+            var cropDrawRect = new Rectangle
             {
                 Stroke = Brushes.White,
                 StrokeThickness = 1.5,
@@ -165,11 +166,11 @@ namespace KillerPDF
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 { Color = Colors.Black, ShadowDepth = 0, BlurRadius = 3, Opacity = 0.7 },
             };
-            Canvas.SetLeft(_cropPreviewRect, pos.X);
-            Canvas.SetTop(_cropPreviewRect, pos.Y);
-            Panel.SetZIndex(_cropPreviewRect, 1);
-            _activeCanvas.Children.Add(_cropPreviewRect);
-            _activePreview = _cropPreviewRect;
+            Canvas.SetLeft(cropDrawRect, pos.X);
+            Canvas.SetTop(cropDrawRect, pos.Y);
+            Panel.SetZIndex(cropDrawRect, 2);
+            _activeCanvas.Children.Add(cropDrawRect);
+            _activePreview = cropDrawRect;
             _activeCanvas.CaptureMouse();
         }
 

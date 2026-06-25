@@ -32,7 +32,7 @@ namespace KillerPDF
         private TextBox _locationBox = null!;
         private TextBox _contactBox = null!;
         private TextBox _outputBox = null!;
-        private readonly List<X509Certificate2> _storeCerts = new();
+        private readonly List<X509Certificate2> _storeCerts = [];
 
         // Segoe MDL2 Assets close glyph, matching the main window + print dialog chrome.
         private const string CloseGlyph = "";
@@ -187,46 +187,10 @@ namespace KillerPDF
         // button - the same construction PrintPreviewWindow uses.
         private Border BuildTitleBar()
         {
-            var titleBar = new Border { Background = Brushes.Transparent };
-            DockPanel.SetDock(titleBar, Dock.Top);
-            titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) DragMove(); };
-
-            var titleGrid = new Grid();
-            titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var ff = new FontFamily("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
-            var wm = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(16, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Colors.Black, BlurRadius = 3, ShadowDepth = 1, Direction = 270, Opacity = 0.6 }
-            };
-            wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = ff, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("TextPrimary"), VerticalAlignment = VerticalAlignment.Center });
-            wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = ff, FontWeight = FontWeights.Bold, FontSize = 15, Foreground = R("AccentLogo"), VerticalAlignment = VerticalAlignment.Center });
-            wm.Children.Add(new TextBlock { Text = " - " + L("Str_Sign_TitleSuffix"), FontFamily = ff, FontSize = 13, Foreground = R("TextSecondary"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 1, 0, 0) });
-            Grid.SetColumn(wm, 0);
-
-            var closeBtn = new Button { Content = CloseGlyph };
-            if (FindOwnerStyle("ChromeCloseButton") is Style chromeClose)
-            {
-                closeBtn.Style = chromeClose;
-            }
-            else
-            {
-                closeBtn = MakeButton(CloseGlyph, false);
-                closeBtn.FontFamily = new FontFamily("Segoe MDL2 Assets");
-                closeBtn.FontSize = 10;
-                closeBtn.Foreground = R("DangerRed");
-            }
-            closeBtn.Click += (_, _) => { DialogResult = false; Close(); };
-            Grid.SetColumn(closeBtn, 1);
-
-            titleGrid.Children.Add(wm);
-            titleGrid.Children.Add(closeBtn);
-            titleBar.Child = titleGrid;
-            return titleBar;
+            var bar = DialogChrome.BuildTitleBar(this, Owner, "KillerPDF - " + L("Str_Sign_TitleSuffix"),
+                () => { DialogResult = false; Close(); });
+            DockPanel.SetDock(bar, Dock.Top);
+            return bar;
         }
 
         private string DefaultOutputPath()

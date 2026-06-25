@@ -40,6 +40,7 @@ namespace KillerPDF
             EditTool.Signature => Cursors.Pen,
             EditTool.Image => Cursors.Hand,
             EditTool.Crop => Cursors.Cross,
+            EditTool.Rotate => Cursors.Cross,
             _ => Cursors.Arrow
         };
 
@@ -48,7 +49,7 @@ namespace KillerPDF
             // Re-clicking the tool that owns the visible annotate bar tucks the bar away (or brings it
             // back) instead of rebuilding it - no flicker, and a quick way to get it out of the way.
             bool reclickedAnnotTool = tool == _currentTool && tool == _annotBarTool
-                && (_textSettingsBar is not null || _drawSettingsBar is not null);
+                && (_textSettingsBar is not null || _drawSettingsBar is not null || _cropConfirmBar is not null);
             if (reclickedAnnotTool)
             {
                 ToggleAnnotBarMinimized();
@@ -70,7 +71,8 @@ namespace KillerPDF
                 (_toolDrawBtn, EditTool.Draw),
                 (_toolSignatureBtn, EditTool.Signature),
                 (_toolImageBtn, EditTool.Image),
-                (_toolCropBtn, EditTool.Crop)
+                (_toolCropBtn, EditTool.Crop),
+                (_toolRotateBtn, EditTool.Rotate)
             };
             foreach (var (btn, t) in map)
             {
@@ -117,9 +119,11 @@ namespace KillerPDF
                 _pendingSignature = null;
             }
 
-            // Dismiss crop confirm bar when switching away from Crop
+            // Dismiss crop confirm bar when switching away from Crop; entering Crop drops a default box + bar.
             if (tool != EditTool.Crop)
                 HideCropConfirmBar();
+            else if (_cropConfirmBar is null)
+                ShowDefaultCropBox();
 
             // NOTE: deliberately NOT reflowing the toolbar here. Reflowing on every tool switch at a narrow
             // width visibly thrashes the whole bar. The active-tool protection still runs on resize (the

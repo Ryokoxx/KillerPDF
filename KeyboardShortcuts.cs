@@ -100,6 +100,15 @@ namespace KillerPDF
                 CloseSearchBar();
                 e.Handled = true;
             }
+            else if (e.Key == Key.Escape && _busyCts is not null)
+            {
+                // A cancellable long operation (OCR, repair) is running behind the busy overlay - offer to
+                // cancel it instead of letting Escape fall through to the app-exit handler below.
+                if (KillerDialog.Show(this, $"Cancel the current {_busyOpLabel}?", "KillerPDF",
+                        MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                    _busyCts?.Cancel();
+                e.Handled = true;
+            }
             else if (e.Key == Key.OemQuestion && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 if (ShortcutOverlay.Visibility == Visibility.Visible) FadeOverlayOut(ShortcutOverlay);
@@ -260,6 +269,7 @@ namespace KillerPDF
                 case Key.I: case Key.D6: case Key.NumPad6: SetTool(EditTool.Image); return true;
                 case Key.G: case Key.D7: case Key.NumPad7: ToolSignature_Click(this, new RoutedEventArgs()); return true;
                 case Key.C: case Key.D8: case Key.NumPad8: SetTool(EditTool.Crop); return true;
+                case Key.D9: case Key.NumPad9: ToolRotate_Click(this, new RoutedEventArgs()); return true;
                 default: return false;
             }
         }

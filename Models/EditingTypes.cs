@@ -4,7 +4,7 @@ using System.Windows.Media;
 
 namespace KillerPDF
 {
-    public enum EditTool { Select, Text, Highlight, Strikethrough, Underline, Draw, Signature, Image, Crop, Line }
+    public enum EditTool { Select, Text, Highlight, Strikethrough, Underline, Draw, Signature, Image, Crop, Line, Rotate }
 
     /// <summary>How a HighlightAnnotation paints over its bounds.</summary>
     public enum HighlightStyle { Fill, Strikethrough, Underline }

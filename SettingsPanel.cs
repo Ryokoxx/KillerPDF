@@ -551,6 +551,7 @@ namespace KillerPDF
             [""] = "Str_Lbl_Close",
             [""] = "Str_Lbl_Save",
             [""] = "Str_Lbl_Flatten",
+            [""] = "Str_Lbl_Ocr",
             [""] = "Str_Lbl_Print",
             [""] = "Str_Lbl_Merge",
             [""] = "Str_Lbl_Extract",
@@ -564,6 +565,7 @@ namespace KillerPDF
             [""] = "Str_Lbl_Underline",
             [""] = "Str_Lbl_Draw",
             [""] = "Str_Lbl_Crop",
+            [""] = "Str_Lbl_Rotate",
             [""] = "Str_Lbl_Image",
             [""] = "Str_Lbl_Signature",
             [""] = "Str_Lbl_Undo",
@@ -695,7 +697,7 @@ namespace KillerPDF
             "Str_Lbl_Select" => 1,
             "Str_Lbl_Undo" or "Str_Lbl_Clear" => 2,
             "Str_Lbl_New" or "Str_Lbl_Open" or "Str_Lbl_Close"
-                or "Str_Lbl_Save" or "Str_Lbl_Flatten" or "Str_Lbl_Print" => 3,
+                or "Str_Lbl_Save" or "Str_Lbl_Flatten" or "Str_Lbl_Ocr" or "Str_Lbl_Print" => 3,
             "Str_Lbl_MoveUp" or "Str_Lbl_MoveDown" or "Str_Lbl_Delete"
                 or "Str_Lbl_Merge" or "Str_Lbl_Extract" => 4,
             _ => 5,   // annotation tools keep their labels longest
@@ -884,7 +886,7 @@ namespace KillerPDF
             finally { _reflowingToolbar = false; }
         }
 
-        private static readonly Size ToolbarMeasureBudget = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        private static readonly Size ToolbarMeasureBudget = new(double.PositiveInfinity, double.PositiveInfinity);
 
         // Re-measures ONLY the two toolbar bars to refresh their DesiredSize, instead of calling
         // ToolbarGrid.UpdateLayout() - which forces a synchronous Measure+Arrange of the ENTIRE visual
