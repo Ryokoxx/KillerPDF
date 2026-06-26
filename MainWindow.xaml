@@ -1064,18 +1064,16 @@
                     <!-- Soft drop shadow: a blurred, offset copy behind the crisp wordmark -->
                     <StackPanel Orientation="Horizontal" Margin="1,2,0,0" Opacity="{DynamicResource IconShadowOpacity}">
                         <StackPanel.Effect><BlurEffect Radius="3"/></StackPanel.Effect>
-                        <TextBlock Text="Killer" FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontWeight="Bold" FontSize="16" Foreground="#D8000000"/>
-                        <TextBlock Text="PDF" FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontWeight="Bold" FontSize="16" Foreground="#D8000000"/>
+                        <TextBlock><Run Text="Killer" FontFamily="{DynamicResource WordmarkFont}" FontSize="15.5" Foreground="#D8000000"/><Run Text="PDF" FontFamily="{DynamicResource WordmarkFontPdf}" FontWeight="Bold" FontSize="19" Foreground="#D8000000"/></TextBlock>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="Killer" FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontWeight="Bold" FontSize="16" Foreground="{DynamicResource TextPrimary}"/>
-                        <TextBlock Text="PDF" FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontWeight="Bold" FontSize="16" Foreground="{DynamicResource AccentLogo}"/>
+                        <TextBlock><Run Text="Killer" FontFamily="{DynamicResource WordmarkFont}" FontSize="15.5" Foreground="{DynamicResource TextPrimary}"/><Run Text="PDF" FontFamily="{DynamicResource WordmarkFontPdf}" FontWeight="Bold" FontSize="19" Foreground="{DynamicResource AccentLogo}"/></TextBlock>
                     </StackPanel>
                 </Grid>
                 <!-- File name: takes the middle space and truncates before the window buttons -->
                 <TextBlock Grid.Column="1" Text="" x:Name="FileNameLabel" VerticalAlignment="Center"
                            Margin="16,0,12,0" TextTrimming="CharacterEllipsis"
-                           Foreground="{DynamicResource TextSecondary}" FontFamily="Consolas" FontSize="11"/>
+                           Foreground="{DynamicResource FilenameBrush}" FontFamily="Consolas" FontSize="11"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="&#xE921;" Click="MinimizeBtn_Click" Style="{StaticResource ChromeButton}" WindowChrome.IsHitTestVisibleInChrome="True"/>
                     <Button Content="&#xE922;" Click="MaximizeBtn_Click" Style="{StaticResource ChromeButton}" WindowChrome.IsHitTestVisibleInChrome="True"/>
@@ -1436,6 +1434,34 @@
                                 Click="SidebarToggle_Click"/>
                         <!-- Settings and help icons pinned to bottom -->
                         <StackPanel VerticalAlignment="Bottom" Margin="0,0,0,6">
+                            <Button Click="DocInfo_Click"
+                                    Cursor="Hand" FocusVisualStyle="{x:Null}"
+                                    ToolTip="{DynamicResource Str_TT_DocInfo}"
+                                    Width="24" Height="24" Padding="0" Margin="0,0,0,6">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="Transparent">
+                                            <TextBlock Text="&#xE946;"
+                                                       FontFamily="Segoe MDL2 Assets" FontSize="15"
+                                                       Foreground="{DynamicResource TextPrimary}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <TextBlock.Effect>
+                                                    <DropShadowEffect Color="Black" BlurRadius="4" ShadowDepth="2" Direction="270" Opacity="{DynamicResource IconShadowOpacity}"/>
+                                                </TextBlock.Effect>
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
                             <Button Click="ShortcutHelp_Click"
                                     Cursor="Hand" FocusVisualStyle="{x:Null}"
                                     ToolTip="{DynamicResource Str_TT_KeyboardShortcuts}"
@@ -1716,7 +1742,7 @@
             </Border>
             <Grid Margin="16,0">
                 <TextBlock x:Name="StatusText" Text="{DynamicResource Str_Ready}"
-                           Foreground="{DynamicResource TextSecondary}"
+                           Foreground="{DynamicResource FilenameBrush}"
                            FontFamily="Segoe UI, Microsoft JhengHei UI, Nirmala UI" FontSize="11" VerticalAlignment="Center"/>
                 <!-- Portable mode indicator (hidden when installed) -->
                 <StackPanel x:Name="PortableBadge" Orientation="Horizontal"
@@ -1757,7 +1783,7 @@
                     </Button>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <TextBlock x:Name="VersionLabel" Text="v1.5.8"
+                    <TextBlock x:Name="VersionLabel" Text="v1.5.9"
                                Foreground="{DynamicResource TextFooter}" FontFamily="Consolas"
                                FontSize="10" VerticalAlignment="Center" Margin="0,0,12,0"
                                Cursor="Hand" ToolTip="{DynamicResource Str_TT_About}"
@@ -2477,13 +2503,13 @@
                         <StackPanel VerticalAlignment="Center">
                             <!-- Logo (populated in code-behind), with a soft layered shadow -->
                             <Grid Margin="0,0,0,4">
-                                <TextBlock Text="KillerPDF" FontSize="22" FontWeight="Bold"
+                                <TextBlock Text="KillerPDF" FontFamily="{DynamicResource WordmarkFont}" FontSize="22" FontWeight="Bold"
                                            Foreground="#B0000000" Margin="1,2,0,0" IsHitTestVisible="False"
                                            Opacity="{DynamicResource IconShadowOpacity}">
                                     <TextBlock.Effect><BlurEffect Radius="2"/></TextBlock.Effect>
                                 </TextBlock>
                                 <TextBlock x:Name="AboutLogoBlock"
-                                           FontSize="22" FontWeight="Bold" Cursor="Hand"/>
+                                           FontFamily="{DynamicResource WordmarkFont}" FontSize="22" FontWeight="Bold" Cursor="Hand"/>
                             </Grid>
                             <!-- Tagline (populated in code-behind with hyperlinks) -->
                             <TextBlock x:Name="AboutTaglineBlock"

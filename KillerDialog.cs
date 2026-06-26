@@ -77,8 +77,10 @@ namespace KillerPDF
             if (title == "KillerPDF")
             {
                 var wm = new StackPanel { Orientation = Orientation.Horizontal };
-                wm.Children.Add(new TextBlock { Text = "Killer", FontFamily = UiKit.UiFont, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("TextPrimary") });
-                wm.Children.Add(new TextBlock { Text = "PDF", FontFamily = UiKit.UiFont, FontWeight = FontWeights.Bold, FontSize = 15.5, Foreground = R("AccentLogo") });
+                var wmTb = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+                wmTb.Inlines.Add(new System.Windows.Documents.Run("Killer") { FontFamily = UiKit.WordmarkFont, FontWeight = FontWeights.Normal, FontSize = 15, Foreground = R("TextPrimary") });
+                wmTb.Inlines.Add(new System.Windows.Documents.Run("PDF") { FontFamily = UiKit.WordmarkFontPdf, FontWeight = FontWeights.Bold, FontSize = 18, Foreground = R("AccentLogo") });
+                wm.Children.Add(wmTb);
                 // No DropShadowEffect on the text - it rasterizes and blurs the wordmark. Kept crisp.
                 titleBar.Child = wm;
             }

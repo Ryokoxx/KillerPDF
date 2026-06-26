@@ -33,6 +33,7 @@
     <SolidColorBrush x:Key="SettingsOpenRowBg" Color="#404040" po:Freeze="True"/>
     <SolidColorBrush x:Key="TextPrimary"    Color="#e0e0e0" po:Freeze="True"/>
     <SolidColorBrush x:Key="TextSecondary"  Color="#a0a0a0" po:Freeze="True"/>
+    <SolidColorBrush x:Key="FilenameBrush"  Color="#a0a0a0" po:Freeze="True"/>
     <SolidColorBrush x:Key="TextDim"        Color="#6a6a6a" po:Freeze="True"/>
     <SolidColorBrush x:Key="TextFooter"     Color="#6a6a6a" po:Freeze="True"/>
     <SolidColorBrush x:Key="DangerRed"      Color="#ef4444" po:Freeze="True"/>

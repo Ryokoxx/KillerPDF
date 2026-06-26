@@ -10,9 +10,9 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Resources\kp-icon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.5.8</Version>
-    <AssemblyVersion>1.5.8.0</AssemblyVersion>
-    <FileVersion>1.5.8.0</FileVersion>
+    <Version>1.5.9</Version>
+    <AssemblyVersion>1.5.9.0</AssemblyVersion>
+    <FileVersion>1.5.9.0</FileVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -63,6 +63,8 @@
   <ItemGroup>
     <Resource Include="Resources\kp-icon.ico" />
     <Resource Include="Resources\kp-icon.png" />
+    <Resource Include="Fonts\Typewriter-wm.ttf" />
+    <EmbeddedResource Include="Resources\pdf-file.ico" />
   </ItemGroup>
 
   <!-- OCR: embed only the native Tesseract libs (x64) so the app still ships as a single exe. Language data

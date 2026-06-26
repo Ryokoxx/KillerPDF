@@ -122,6 +122,11 @@ namespace KillerPDF
                 else ShowAboutOverlay();
                 e.Handled = true;
             }
+            else if (e.Key == Key.F12)
+            {
+                OpenDocumentInfo();
+                e.Handled = true;
+            }
             else if (e.Key == Key.F5) { SetViewMode(ViewMode.Continuous); e.Handled = true; }
             else if (e.Key == Key.F6) { SetViewMode(ViewMode.Single);     e.Handled = true; }
             else if (e.Key == Key.F7) { SetViewMode(ViewMode.TwoPage);    e.Handled = true; }

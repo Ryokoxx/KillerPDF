@@ -17,9 +17,13 @@ namespace KillerPDF
         public static FontFamily UiFont   => Res("UiFont",   _uiFallback);
         public static FontFamily MonoFont => Res("MonoFont", _monoFallback);
         public static FontFamily IconFont => Res("IconFont", _iconFallback);
+        public static FontFamily WordmarkFont => Res("WordmarkFont", _wordmarkFallback);
+        public static FontFamily WordmarkFontPdf => Res("WordmarkFontPdf", _wordmarkPdfFallback);
         private static readonly FontFamily _uiFallback   = new("Segoe UI, Microsoft JhengHei UI, Nirmala UI");
         private static readonly FontFamily _monoFallback = new("Consolas");
         private static readonly FontFamily _iconFallback = new("Segoe MDL2 Assets");
+        private static readonly FontFamily _wordmarkFallback = new("Typewriter A602, Consolas");
+        private static readonly FontFamily _wordmarkPdfFallback = new("Typewriter A602, Consolas");
 
         public static CornerRadius RadControl => Rad("RadControl", 3);
         public static CornerRadius RadCard    => Rad("RadCard", 6);

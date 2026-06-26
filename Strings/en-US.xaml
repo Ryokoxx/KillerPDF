@@ -90,6 +90,17 @@
     <sys:String x:Key="Str_KS_ConfirmCancel">Confirm / cancel text or crop</sys:String>
     <sys:String x:Key="Str_KS_SearchSelect">SEARCH &amp; SELECT</sys:String>
     <sys:String x:Key="Str_KS_Ocr">OCR</sys:String>
+
+    <!-- Document Info dialog -->
+    <sys:String x:Key="Str_TT_DocInfo">Document info (F12)</sys:String>
+    <sys:String x:Key="Str_DocInfo_Suffix">Document Info</sys:String>
+    <sys:String x:Key="Str_DocInfo_Title">Title</sys:String>
+    <sys:String x:Key="Str_DocInfo_Author">Author</sys:String>
+    <sys:String x:Key="Str_DocInfo_Subject">Subject</sys:String>
+    <sys:String x:Key="Str_DocInfo_Keywords">Keywords</sys:String>
+    <sys:String x:Key="Str_DocInfo_Creator">Creator</sys:String>
+    <sys:String x:Key="Str_DocInfo_Save">Save</sys:String>
+    <sys:String x:Key="Str_DocInfo_Cancel">Cancel</sys:String>
     <sys:String x:Key="Str_KS_Find">Find / search</sys:String>
     <sys:String x:Key="Str_KS_NextPrevResult">Next / previous result</sys:String>
     <sys:String x:Key="Str_KS_SelectAll">Select all text on page</sys:String>

@@ -50,10 +50,14 @@ namespace KillerPDF
             var logoHl = new System.Windows.Documents.Hyperlink { TextDecorations = null };
             logoHl.Inlines.Add(new System.Windows.Documents.Run("Killer")
             {
+                FontSize = 21,
+                FontWeight = System.Windows.FontWeights.Normal,
                 Foreground = (System.Windows.Media.Brush)FindResource("TextPrimary")
             });
             logoHl.Inlines.Add(new System.Windows.Documents.Run("PDF")
             {
+                FontFamily = UiKit.WordmarkFontPdf,
+                FontSize = 26,
                 Foreground = (System.Windows.Media.Brush)FindResource("AccentLogo")
             });
             logoHl.Click += (_, _) =>

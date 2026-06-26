@@ -1017,6 +1017,22 @@ namespace KillerPDF
             menu.IsOpen = true;
         }
 
+        private void DocInfo_Click(object sender, RoutedEventArgs e) => OpenDocumentInfo();
+
+        // Opens the Document Info dialog; edits are applied to the live doc and persist on the next save.
+        private void OpenDocumentInfo()
+        {
+            if (_doc is null) { KillerDialog.Show(this, "Open a PDF first."); return; }
+            CommitActiveTextBox();
+            var dlg = new DocumentInfoDialog(this, _doc, _originalFile ?? _currentFile);
+            dlg.ShowDialog();   // fade-close dialogs don't reliably return true; rely on the Saved flag
+            if (dlg.Saved)
+            {
+                MarkDirty();
+                SetStatus("Document info updated - save the file to keep the changes");
+            }
+        }
+
         private void Merge_Click(object sender, RoutedEventArgs e)
         {
             if (_doc is null) { KillerDialog.Show(this, "Open a PDF first."); return; }

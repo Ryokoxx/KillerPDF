@@ -32,6 +32,7 @@ namespace KillerPDF
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs", AppName);
         private static readonly string InstallExe = Path.Combine(InstallDir, ExeName);
+        private static readonly string FileIconPath = Path.Combine(InstallDir, "pdf-file.ico");
 
         private static readonly string StartMenuDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.Programs), AppName);
@@ -1381,6 +1382,9 @@ namespace KillerPDF
                     key.SetValue("NoRepair",             1);
                 }
 
+                // Drop the PDF file-type icon next to the exe so DefaultIcon can point at it
+                ExtractFileIcon();
+
                 // Register as PDF file handler (per-user - no admin needed)
                 RegisterFileHandler();
             }
@@ -1391,15 +1395,37 @@ namespace KillerPDF
             }
         }
 
+        private static void ExtractFileIcon()
+        {
+            try
+            {
+                var asm = Assembly.GetExecutingAssembly();
+                var rn  = Array.Find(asm.GetManifestResourceNames(),
+                    n => n.IndexOf("pdf-file", StringComparison.OrdinalIgnoreCase) >= 0
+                         && n.EndsWith(".ico", StringComparison.OrdinalIgnoreCase));
+                if (rn == null) return; // dev build running from bin/ without the embedded icon
+
+                using (var rs = asm.GetManifestResourceStream(rn)!)
+                using (var fs = File.Create(FileIconPath))
+                    rs.CopyTo(fs);
+            }
+            catch { }
+        }
+
         private static void RegisterFileHandler()
         {
+            // Prefer the dedicated PDF file icon; fall back to the app icon if extraction didn't run
+            string iconRef = File.Exists(FileIconPath)
+                ? $"\"{FileIconPath}\",0"
+                : $"{InstallExe},0";
+
             // ProgID definition
             using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\KillerPDF.pdf"))
                 k.SetValue("", "PDF Document");
 
             using (var k = Registry.CurrentUser.CreateSubKey(
                 @"Software\Classes\KillerPDF.pdf\DefaultIcon"))
-                k.SetValue("", $"{InstallExe},0");
+                k.SetValue("", iconRef);
 
             using (var k = Registry.CurrentUser.CreateSubKey(
                 @"Software\Classes\KillerPDF.pdf\shell\open\command"))
