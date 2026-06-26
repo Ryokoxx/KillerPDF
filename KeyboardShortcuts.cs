@@ -163,6 +163,11 @@ namespace KillerPDF
                 CloseTab(_active);
                 e.Handled = true;
             }
+            else if (e.Key == Key.Q && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                CloseAllTabs();
+                e.Handled = true;
+            }
             else if (e.Key == Key.Tab && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
             {
                 CycleTab(-1);

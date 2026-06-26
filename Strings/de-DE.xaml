@@ -73,6 +73,7 @@
     <sys:String x:Key="Str_KS_File">DATEI</sys:String>
     <sys:String x:Key="Str_KS_Open">Öffnen</sys:String>
     <sys:String x:Key="Str_KS_CloseFile">Datei schließen</sys:String>
+    <sys:String x:Key="Str_KS_CloseAll">Alle schließen</sys:String>
     <sys:String x:Key="Str_KS_NewBlank">Neues leeres Dokument</sys:String>
     <sys:String x:Key="Str_KS_SaveAs">Speichern unter</sys:String>
     <sys:String x:Key="Str_KS_Print">Drucken</sys:String>
@@ -296,6 +297,15 @@ Sie können das Programm jederzeit über „Programme hinzufügen oder entfernen
     <sys:String x:Key="Str_Status_Imported">{0} Bild(er) importiert - noch nicht gespeichert</sys:String>
     <sys:String x:Key="Str_Err_ImportFailed">Import fehlgeschlagen:</sys:String>
     <sys:String x:Key="Str_Err_NoImages">Es konnten keine Bilder gelesen werden.</sys:String>
+    <sys:String x:Key="Str_Drop_Prompt">Sie haben {0} Dateien abgelegt. Wie möchten Sie sie öffnen?</sys:String>
+    <sys:String x:Key="Str_Drop_Merge">In einer PDF zusammenführen</sys:String>
+    <sys:String x:Key="Str_Drop_Separate">Einzeln öffnen</sys:String>
+    <sys:String x:Key="Str_Drop_NothingOpenable">Keine PDFs oder Bilder zum Öffnen gefunden.</sys:String>
+    <sys:String x:Key="Str_Drop_ManyTabs">Dies öffnet {0} separate Tabs. Fortfahren?</sys:String>
+    <sys:String x:Key="Str_Status_Merged">{0} Dateien zusammengeführt - noch nicht gespeichert</sys:String>
+    <sys:String x:Key="Str_Drop_Merging">Dateien werden zusammengeführt...</sys:String>
+    <sys:String x:Key="Str_Drop_MergeCancelled">Zusammenführen abgebrochen</sys:String>
+    <sys:String x:Key="Str_Dlg_UnsavedCloseAll">Alle Dokumente schließen? Nicht gespeicherte Änderungen gehen verloren.</sys:String>
     <sys:String x:Key="Str_Msg_OpenFirst">Öffnen Sie zuerst eine PDF.</sys:String>
     <sys:String x:Key="Str_Dlg_SaveBeforeZip">Änderungen vor dem Komprimieren in ZIP speichern?</sys:String>
     <sys:String x:Key="Str_Status_Zipped">Als ZIP gespeichert: {0} - {1} (vorher {2})</sys:String>

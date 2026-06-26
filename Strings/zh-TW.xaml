@@ -75,6 +75,7 @@
     <sys:String x:Key="Str_KS_File">檔案</sys:String>
     <sys:String x:Key="Str_KS_Open">開啟</sys:String>
     <sys:String x:Key="Str_KS_CloseFile">關閉檔案</sys:String>
+    <sys:String x:Key="Str_KS_CloseAll">全部關閉</sys:String>
     <sys:String x:Key="Str_KS_NewBlank">新增空白文件</sys:String>
     <sys:String x:Key="Str_KS_SaveAs">另存新檔</sys:String>
     <sys:String x:Key="Str_KS_Print">列印</sys:String>
@@ -298,6 +299,15 @@
     <sys:String x:Key="Str_Status_Imported">已匯入 {0} 張圖片 - 尚未儲存</sys:String>
     <sys:String x:Key="Str_Err_ImportFailed">匯入失敗：</sys:String>
     <sys:String x:Key="Str_Err_NoImages">無法讀取任何圖片。</sys:String>
+    <sys:String x:Key="Str_Drop_Prompt">您拖放了 {0} 個檔案。您想如何開啟它們？</sys:String>
+    <sys:String x:Key="Str_Drop_Merge">合併為單一 PDF</sys:String>
+    <sys:String x:Key="Str_Drop_Separate">分別開啟</sys:String>
+    <sys:String x:Key="Str_Drop_NothingOpenable">找不到可開啟的 PDF 或圖片。</sys:String>
+    <sys:String x:Key="Str_Drop_ManyTabs">這將開啟 {0} 個獨立分頁。要繼續嗎？</sys:String>
+    <sys:String x:Key="Str_Status_Merged">已合併 {0} 個檔案 - 尚未儲存</sys:String>
+    <sys:String x:Key="Str_Drop_Merging">正在合併檔案...</sys:String>
+    <sys:String x:Key="Str_Drop_MergeCancelled">已取消合併</sys:String>
+    <sys:String x:Key="Str_Dlg_UnsavedCloseAll">關閉所有文件？未儲存的變更將會遺失。</sys:String>
     <sys:String x:Key="Str_Msg_OpenFirst">請先開啟一個 PDF。</sys:String>
     <sys:String x:Key="Str_Dlg_SaveBeforeZip">壓縮為 ZIP 前儲存變更？</sys:String>
     <sys:String x:Key="Str_Status_Zipped">已壓縮為 {0} - {1}（原 {2}）</sys:String>

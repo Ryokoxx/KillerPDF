@@ -274,6 +274,12 @@ namespace KillerPDF
             InitializeComponent();
             var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             if (v != null) VersionLabel.Text = $"v{v.Major}.{v.Minor}.{v.Build}";
+            // Accept dropped files/folders/archives anywhere on the window (not just the empty drop zone),
+            // so dropping onto an open document works too. The empty-state DropZone marks its own drop
+            // handled, so a drop there isn't processed twice.
+            AllowDrop = true;
+            DragOver += DropZone_DragOver;
+            Drop     += DropZone_Drop;
             // Safety net: if the window loses focus mid-drag/resize (e.g. Alt-Tab away to type elsewhere),
             // the mouse-up can be lost and the dragged annotation would stay glued to the cursor with the
             // canvas still holding mouse capture. End any in-progress gesture on deactivate so control is

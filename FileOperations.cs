@@ -1660,15 +1660,20 @@ namespace KillerPDF
             // stream in via SetRenderedPage, so the window appears at once and the app stays
             // responsive on large files. WPF's OS PrintDialog can't show a preview, so KillerPDF
             // renders it and drives printing itself.
-            var preview = new PrintPreviewWindow(this, pageCount, pageDipW, pageDipH);
             string  renderPath = printPath;
             string? cleanup    = tempFlattened;
+            // Preview rasters are display-only (shown fit-to-pane in a Viewbox), so render them at a
+            // modest budget that scales DOWN as the document grows - this keeps the preview's resident
+            // bitmaps from ballooning on large files. The Print button re-renders the chosen pages at a
+            // true 300 DPI on demand (PrintPreviewWindow.DoPrint), so output stays crisp (issue #83).
+            int previewBox = pageCount <= 80 ? 1536 : pageCount <= 250 ? 1100 : 800;
+            var preview = new PrintPreviewWindow(this, pageCount, pageDipW, pageDipH, renderPath, cleanup);
 
             _ = Task.Run(() =>
             {
                 try
                 {
-                    using var docReader = DocLib.Instance.GetDocReader(renderPath, new PageDimensions(1536, 1536));
+                    using var docReader = DocLib.Instance.GetDocReader(renderPath, new PageDimensions(previewBox, previewBox));
                     for (int i = 0; i < pageCount; i++)
                     {
                         if (preview.Cancelled) return;
@@ -1691,10 +1696,8 @@ namespace KillerPDF
                 {
                     try { preview.Dispatcher.Invoke(() => preview.LoadFailed(ex.Message)); } catch { }
                 }
-                finally
-                {
-                    if (cleanup != null) try { System.IO.File.Delete(cleanup); } catch { }
-                }
+                // The flattened temp (cleanup) is NOT deleted here anymore: the Print button re-reads
+                // renderPath to rasterize at 300 DPI, so the window owns the temp and deletes it on close.
             });
 
             try

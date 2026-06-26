@@ -185,6 +185,97 @@ namespace KillerPDF
         }
 
         /// <summary>
+        /// Like <see cref="Show"/> but with a custom set of buttons. Returns the index of the clicked
+        /// button, or -1 if the dialog was closed without a choice. The button at <paramref name="accentIndex"/>
+        /// is rendered as the primary (accent) action.
+        /// </summary>
+        public static int ShowChoices(
+            Window? owner,
+            string message,
+            string[] labels,
+            int accentIndex = 0,
+            string title = "KillerPDF")
+        {
+            int result = -1;
+
+            var win = new Window { Title = title, MinWidth = 380, MaxWidth = 760, SizeToContent = SizeToContent.WidthAndHeight };
+            DialogChrome.Configure(win, owner, fade: true);
+
+            var outerBorder = new Border
+            {
+                Background = R("BgModal"),
+                BorderBrush = R("AccentBorder"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(10),
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                { Color = Colors.Black, BlurRadius = 18, ShadowDepth = 3, Direction = 270, Opacity = 0.6 }
+            };
+
+            var root = new StackPanel();
+
+            var titleBar = new Border { Background = Brushes.Transparent, Padding = new Thickness(16, 10, 16, 10) };
+            titleBar.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
+            if (title == "KillerPDF")
+            {
+                var wmTb = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+                wmTb.Inlines.Add(new System.Windows.Documents.Run("Killer") { FontFamily = UiKit.WordmarkFont, FontWeight = FontWeights.Normal, FontSize = 15, Foreground = R("TextPrimary") });
+                wmTb.Inlines.Add(new System.Windows.Documents.Run("PDF") { FontFamily = UiKit.WordmarkFontPdf, FontWeight = FontWeights.Bold, FontSize = 18, Foreground = R("AccentLogo") });
+                titleBar.Child = wmTb;
+            }
+            else
+            {
+                titleBar.Child = new TextBlock { Text = title, Foreground = R("Accent"), FontWeight = FontWeights.Bold, FontSize = 14, FontFamily = UiKit.MonoFont };
+            }
+            root.Children.Add(titleBar);
+
+            root.Children.Add(new Border
+            {
+                Padding = new Thickness(20, 16, 20, 8),
+                Child = new TextBlock { Text = message, Foreground = R("TextPrimary"), FontSize = 13, TextWrapping = TextWrapping.Wrap, MaxWidth = 560 }
+            });
+
+            var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            for (int i = 0; i < labels.Length; i++)
+            {
+                int idx = i;
+                var btn = UiKit.Make(labels[i], accent: i == accentIndex);
+                btn.Padding = new Thickness(22, 8, 22, 8);
+                btn.MinWidth = 96;
+                btn.Margin = new Thickness(8, 0, 0, 0);
+                btn.Click += (_, _2) => { result = idx; win.Close(); };
+                btnPanel.Children.Add(btn);
+            }
+            root.Children.Add(new Border { Padding = new Thickness(16, 8, 16, 16), Child = btnPanel });
+
+            var contentGrid = new Grid();
+            var grain = (owner as MainWindow)?.GrainTexture;
+            if (grain is not null)
+            {
+                double grainOpacity = Application.Current.Resources["GrainOpacity"] is double go ? go : 0.05;
+                contentGrid.Children.Add(new Border
+                {
+                    CornerRadius = new CornerRadius(6),
+                    IsHitTestVisible = false,
+                    Opacity = grainOpacity,
+                    Background = new ImageBrush(grain)
+                    {
+                        TileMode = TileMode.Tile,
+                        ViewportUnits = BrushMappingMode.Absolute,
+                        Viewport = new Rect(0, 0, 256, 256),
+                        Stretch = Stretch.None
+                    }
+                });
+            }
+            contentGrid.Children.Add(root);
+            outerBorder.Child = contentGrid;
+
+            win.Content = outerBorder;
+            win.ShowDialog();
+            return result;
+        }
+
+        /// <summary>
         /// Like <see cref="Show"/> but with a "don't warn again" style checkbox between the message and the
         /// buttons. Returns the button result and the checkbox state.
         /// </summary>

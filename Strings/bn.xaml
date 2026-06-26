@@ -73,6 +73,7 @@
     <sys:String x:Key="Str_KS_File">ফাইল</sys:String>
     <sys:String x:Key="Str_KS_Open">খুলুন</sys:String>
     <sys:String x:Key="Str_KS_CloseFile">ফাইল বন্ধ করুন</sys:String>
+    <sys:String x:Key="Str_KS_CloseAll">সব বন্ধ করুন</sys:String>
     <sys:String x:Key="Str_KS_NewBlank">নতুন ফাঁকা নথি</sys:String>
     <sys:String x:Key="Str_KS_SaveAs">এভাবে সংরক্ষণ করুন</sys:String>
     <sys:String x:Key="Str_KS_Print">মুদ্রণ</sys:String>
@@ -296,6 +297,15 @@
     <sys:String x:Key="Str_Status_Imported">{0}টি ছবি আমদানি করা হয়েছে - এখনও সংরক্ষণ করা হয়নি</sys:String>
     <sys:String x:Key="Str_Err_ImportFailed">আমদানি ব্যর্থ হয়েছে:</sys:String>
     <sys:String x:Key="Str_Err_NoImages">কোনো ছবি পড়া যায়নি।</sys:String>
+    <sys:String x:Key="Str_Drop_Prompt">আপনি {0}টি ফাইল ছেড়েছেন। আপনি কীভাবে সেগুলি খুলতে চান?</sys:String>
+    <sys:String x:Key="Str_Drop_Merge">একটি PDF-এ একত্র করুন</sys:String>
+    <sys:String x:Key="Str_Drop_Separate">আলাদাভাবে খুলুন</sys:String>
+    <sys:String x:Key="Str_Drop_NothingOpenable">খোলার জন্য কোনো PDF বা ছবি পাওয়া যায়নি।</sys:String>
+    <sys:String x:Key="Str_Drop_ManyTabs">এটি {0}টি আলাদা ট্যাব খুলবে। চালিয়ে যাবেন?</sys:String>
+    <sys:String x:Key="Str_Status_Merged">{0}টি ফাইল একত্র করা হয়েছে - এখনও সংরক্ষণ করা হয়নি</sys:String>
+    <sys:String x:Key="Str_Drop_Merging">ফাইল একত্র করা হচ্ছে...</sys:String>
+    <sys:String x:Key="Str_Drop_MergeCancelled">একত্রীকরণ বাতিল করা হয়েছে</sys:String>
+    <sys:String x:Key="Str_Dlg_UnsavedCloseAll">সব নথি বন্ধ করবেন? অসংরক্ষিত পরিবর্তন হারিয়ে যাবে।</sys:String>
     <sys:String x:Key="Str_Msg_OpenFirst">প্রথমে একটি PDF খুলুন।</sys:String>
     <sys:String x:Key="Str_Dlg_SaveBeforeZip">ZIP-এ সংকুচিত করার আগে পরিবর্তনগুলি সংরক্ষণ করবেন?</sys:String>
     <sys:String x:Key="Str_Status_Zipped">{0}-এ সংকুচিত - {1} (পূর্বে {2})</sys:String>

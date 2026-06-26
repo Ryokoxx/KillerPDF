@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Win32;
 using PdfSharpCore.Drawing;
@@ -55,47 +59,7 @@ namespace KillerPDF
         private static string BuildPdfFromImages(string[] imagePaths)
         {
             using var pdf = new PdfDocument();
-
-            foreach (var path in imagePaths)
-            {
-                using var img = System.Drawing.Image.FromFile(path);
-                var dim = new System.Drawing.Imaging.FrameDimension(img.FrameDimensionsList[0]);
-                int frameCount = Math.Max(1, img.GetFrameCount(dim));
-
-                for (int f = 0; f < frameCount; f++)
-                {
-                    img.SelectActiveFrame(dim, f);
-
-                    int wpx = img.Width, hpx = img.Height;
-                    double dpiX = img.HorizontalResolution > 0 ? img.HorizontalResolution : 96.0;
-                    double dpiY = img.VerticalResolution   > 0 ? img.VerticalResolution   : 96.0;
-                    double wPt = wpx * 72.0 / dpiX;
-                    double hPt = hpx * 72.0 / dpiY;
-
-                    // Copy the active frame to a fresh 32bpp bitmap, then encode PNG (XImage reads that).
-                    byte[] png;
-                    using (var frame = new System.Drawing.Bitmap(wpx, hpx,
-                               System.Drawing.Imaging.PixelFormat.Format32bppArgb))
-                    {
-                        using (var g = System.Drawing.Graphics.FromImage(frame))
-                        {
-                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                            g.DrawImage(img, 0, 0, wpx, hpx);
-                        }
-                        using var ms = new MemoryStream();
-                        frame.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                        png = ms.ToArray();
-                    }
-
-                    var page = pdf.AddPage();
-                    page.Width  = wPt;   // XUnit implicitly treats a double as points
-                    page.Height = hPt;
-
-                    using var gfx  = XGraphics.FromPdfPage(page);
-                    using var xImg = XImage.FromStream(() => new MemoryStream(png));
-                    gfx.DrawImage(xImg, 0, 0, wPt, hPt);
-                }
-            }
+            foreach (var path in imagePaths) AddImagePagesFromFile(pdf, path);
 
             if (pdf.PageCount == 0)
                 throw new InvalidOperationException(
@@ -105,6 +69,258 @@ namespace KillerPDF
                 $"Imported-{DateTime.Now:yyyyMMdd-HHmmss-fff}.pdf");
             pdf.Save(outPath);
             return outPath;
+        }
+
+        // Appends one page per image frame (multi-frame TIFF/GIF expand to one page per frame). Page
+        // size matches the image's physical size at its own DPI (96 if it declares none).
+        private static void AddImagePagesFromFile(PdfDocument pdf, string path)
+        {
+            using var img = System.Drawing.Image.FromFile(path);
+            var dim = new System.Drawing.Imaging.FrameDimension(img.FrameDimensionsList[0]);
+            int frameCount = Math.Max(1, img.GetFrameCount(dim));
+
+            for (int f = 0; f < frameCount; f++)
+            {
+                img.SelectActiveFrame(dim, f);
+
+                int wpx = img.Width, hpx = img.Height;
+                double dpiX = img.HorizontalResolution > 0 ? img.HorizontalResolution : 96.0;
+                double dpiY = img.VerticalResolution   > 0 ? img.VerticalResolution   : 96.0;
+                double wPt = wpx * 72.0 / dpiX;
+                double hPt = hpx * 72.0 / dpiY;
+
+                // Copy the active frame to a fresh 32bpp bitmap, then encode PNG (XImage reads that).
+                byte[] png;
+                using (var frame = new System.Drawing.Bitmap(wpx, hpx,
+                           System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                {
+                    using (var g = System.Drawing.Graphics.FromImage(frame))
+                    {
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(img, 0, 0, wpx, hpx);
+                    }
+                    using var ms = new MemoryStream();
+                    frame.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    png = ms.ToArray();
+                }
+
+                var page = pdf.AddPage();
+                page.Width  = wPt;   // XUnit implicitly treats a double as points
+                page.Height = hPt;
+
+                using var gfx  = XGraphics.FromPdfPage(page);
+                using var xImg = XImage.FromStream(() => new MemoryStream(png));
+                gfx.DrawImage(xImg, 0, 0, wPt, hPt);
+            }
+        }
+
+        // ----- Drag/drop of folders, archives, and multiple files ----------------------------
+
+        private static readonly string[] DropImageExt = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff" };
+        private static bool IsPdfPath(string p)      => p.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+        private static bool IsImagePath(string p)    => DropImageExt.Any(e => p.EndsWith(e, StringComparison.OrdinalIgnoreCase));
+        private static bool IsOpenablePath(string p) => IsPdfPath(p) || IsImagePath(p);
+
+        // Entry point for any file/folder/archive drop. Expands dropped folders (recursively) and .zip
+        // archives, then opens the collected PDFs/images - asking merge-vs-separate when there's >1.
+        private void OnPathsDropped(string[] paths)
+        {
+            if (paths == null || paths.Length == 0) return;
+
+            var found    = new List<string>();
+            var tempDirs = new List<string>();   // extracted-zip temp dirs we may need to clean up
+            bool expanded = false;               // a folder or archive was opened
+            try
+            {
+                foreach (var p in paths)
+                {
+                    if (Directory.Exists(p)) { expanded = true; CollectOpenable(p, found); }
+                    else if (p.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var dir = ExtractZipToTemp(p);
+                        if (dir != null) { expanded = true; tempDirs.Add(dir); CollectOpenable(dir, found); }
+                    }
+                    else if (IsOpenablePath(p)) found.Add(p);
+                }
+            }
+            catch (Exception ex)
+            {
+                CleanupDirs(tempDirs);
+                KillerDialog.Show(this, Loc("Str_Err_ImportFailed") + "\n" + ex.Message,
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            if (found.Count == 0)
+            {
+                CleanupDirs(tempDirs);
+                SetStatus(Loc("Str_Drop_NothingOpenable"));
+                return;
+            }
+
+            // A single dropped file (no folder/zip): open it directly, as before. Temp from a single-file
+            // zip is kept for the session since the opened doc references it.
+            if (!expanded && found.Count == 1) { OpenDropped(found[0]); return; }
+
+            int choice = KillerDialog.ShowChoices(this,
+                string.Format(Loc("Str_Drop_Prompt"), found.Count),
+                new[] { Loc("Str_Drop_Merge"), Loc("Str_Drop_Separate"), Loc("Str_Stamp_Cancel") },
+                accentIndex: 0);
+
+            if (choice == 0)
+            {
+                OpenMerged(found, tempDirs);   // async: builds on a background thread, then owns temp cleanup
+            }
+            else if (choice == 1)
+            {
+                OpenSeparately(found);     // opened docs may reference extracted files - keep temp for the session
+            }
+            else
+            {
+                CleanupDirs(tempDirs);     // cancelled
+            }
+        }
+
+        private void OpenDropped(string path)
+        {
+            if (IsPdfPath(path)) OpenInNewTab(path);
+            else OpenImagesAsImportedTab(new[] { path }, Path.GetFileName(path));
+        }
+
+        private void OpenSeparately(List<string> found)
+        {
+            if (found.Count > 30)
+            {
+                var ok = KillerDialog.Show(this, string.Format(Loc("Str_Drop_ManyTabs"), found.Count),
+                    "KillerPDF", MessageBoxButton.OKCancel);
+                if (ok != MessageBoxResult.OK) return;
+            }
+            foreach (var f in found)
+            {
+                if (IsPdfPath(f)) OpenInNewTab(f);
+                else OpenImagesAsImportedTab(new[] { f }, Path.GetFileName(f));
+            }
+        }
+
+        private async void OpenMerged(List<string> found, List<string> tempDirs)
+        {
+            var target = BeginTabLoad(out var prev, out bool createdNew);
+            var busy = ShowBusyOverlay(Loc("Str_Drop_Merging"));
+            var ct = BeginCancellableOp("merge");   // Esc cancels; the busy overlay keeps the window draggable
+            try
+            {
+                // Build off the UI thread so the window stays responsive (and movable) while it works.
+                string? tempPath = await Task.Run(() => BuildCombinedPdf(found, ct));
+
+                if (ct.IsCancellationRequested || tempPath == null)
+                {
+                    HideBusyOverlay(busy);
+                    AbortTabLoad(target, prev, createdNew);
+                    SetStatus(Loc("Str_Drop_MergeCancelled"));
+                    return;
+                }
+
+                _doc = PdfReader.Open(tempPath, PdfDocumentOpenMode.Modify);
+                FinishOpenFile("Combined.pdf", tempPath);
+                _originalFile = null;   // unsaved -> Save routes to Save As
+                MarkDirty(true);
+                SetStatus(string.Format(Loc("Str_Status_Merged"), found.Count));
+                CaptureSessionState(_active!);
+                SetTool(_currentTool);
+                RebuildTabStrip();
+                HideBusyOverlay(busy);
+            }
+            catch (Exception ex)
+            {
+                HideBusyOverlay(busy);
+                AbortTabLoad(target, prev, createdNew);
+                KillerDialog.Show(this, Loc("Str_Err_ImportFailed") + "\n" + ex.Message,
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                EndCancellableOp();
+                CleanupDirs(tempDirs);
+            }
+        }
+
+        // Opens the given image(s) as a single unsaved imported-PDF tab (same flow as Import Images).
+        private void OpenImagesAsImportedTab(string[] images, string displayName)
+        {
+            var target = BeginTabLoad(out var prev, out bool createdNew);
+            try
+            {
+                string tempPath = BuildPdfFromImages(images);
+                _doc = PdfReader.Open(tempPath, PdfDocumentOpenMode.Modify);
+                FinishOpenFile(displayName, tempPath);
+                _originalFile = null;
+                MarkDirty(true);
+                CaptureSessionState(_active!);
+                SetTool(_currentTool);
+                RebuildTabStrip();
+            }
+            catch (Exception ex)
+            {
+                AbortTabLoad(target, prev, createdNew);
+                KillerDialog.Show(this, Loc("Str_Err_ImportFailed") + "\n" + ex.Message,
+                    "KillerPDF", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        // Builds one PDF from a mix of PDFs (pages imported in order) and images (one page each).
+        // Unreadable / encrypted entries are skipped rather than aborting the whole merge.
+        private static string? BuildCombinedPdf(List<string> files, CancellationToken ct)
+        {
+            using var outPdf = new PdfDocument();
+            foreach (var f in files)
+            {
+                if (ct.IsCancellationRequested) return null;
+                if (IsPdfPath(f))
+                {
+                    try
+                    {
+                        using var src = PdfReader.Open(f, PdfDocumentOpenMode.Import);
+                        for (int i = 0; i < src.PageCount; i++) outPdf.AddPage(src.Pages[i]);
+                    }
+                    catch { /* skip an unreadable/encrypted PDF */ }
+                }
+                else
+                {
+                    try { AddImagePagesFromFile(outPdf, f); } catch { /* skip an unreadable image */ }
+                }
+            }
+
+            if (ct.IsCancellationRequested) return null;
+            if (outPdf.PageCount == 0)
+                throw new InvalidOperationException(
+                    Application.Current.TryFindResource("Str_Err_NoImages") as string ?? "Nothing could be read.");
+
+            string outPath = Path.Combine(Path.GetTempPath(),
+                $"Combined-{DateTime.Now:yyyyMMdd-HHmmss-fff}.pdf");
+            outPdf.Save(outPath);
+            return outPath;
+        }
+
+        // Recursively gathers the PDFs and images under a folder, in a stable name order.
+        private static void CollectOpenable(string dir, List<string> found)
+        {
+            IEnumerable<string> files;
+            try { files = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories); }
+            catch { return; }
+            foreach (var f in files.Where(IsOpenablePath).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                found.Add(f);
+        }
+
+        private static string? ExtractZipToTemp(string zipPath)
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "KillerPDF-zip-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try { Directory.CreateDirectory(dir); ZipFile.ExtractToDirectory(zipPath, dir); return dir; }
+            catch { try { Directory.Delete(dir, true); } catch { } return null; }
+        }
+
+        private static void CleanupDirs(List<string> dirs)
+        {
+            foreach (var d in dirs) try { Directory.Delete(d, true); } catch { }
         }
 
         // ----- Compress the current PDF to a .zip --------------------------------------------

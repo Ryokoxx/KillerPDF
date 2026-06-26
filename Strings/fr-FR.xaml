@@ -65,6 +65,7 @@
     <sys:String x:Key="Str_KS_File">FICHIER</sys:String>
     <sys:String x:Key="Str_KS_Open">Ouvrir</sys:String>
     <sys:String x:Key="Str_KS_CloseFile">Fermer le fichier</sys:String>
+    <sys:String x:Key="Str_KS_CloseAll">Tout fermer</sys:String>
     <sys:String x:Key="Str_KS_NewBlank">Nouveau document vierge</sys:String>
     <sys:String x:Key="Str_KS_SaveAs">Enregistrer sous</sys:String>
     <sys:String x:Key="Str_KS_Print">Imprimer</sys:String>
@@ -325,6 +326,15 @@ Vous pourrez désinstaller le programme à tout moment via « Ajouter ou supprim
     <sys:String x:Key="Str_Status_Imported">{0} image(s) importée(s) - pas encore enregistré</sys:String>
     <sys:String x:Key="Str_Err_ImportFailed">Échec de l'importation :</sys:String>
     <sys:String x:Key="Str_Err_NoImages">Aucune image n'a pu être lue.</sys:String>
+    <sys:String x:Key="Str_Drop_Prompt">Vous avez déposé {0} fichiers. Comment souhaitez-vous les ouvrir ?</sys:String>
+    <sys:String x:Key="Str_Drop_Merge">Fusionner en un seul PDF</sys:String>
+    <sys:String x:Key="Str_Drop_Separate">Ouvrir séparément</sys:String>
+    <sys:String x:Key="Str_Drop_NothingOpenable">Aucun PDF ou image à ouvrir n'a été trouvé.</sys:String>
+    <sys:String x:Key="Str_Drop_ManyTabs">Cela ouvrira {0} onglets séparés. Continuer ?</sys:String>
+    <sys:String x:Key="Str_Status_Merged">{0} fichiers fusionnés - pas encore enregistré</sys:String>
+    <sys:String x:Key="Str_Drop_Merging">Fusion des fichiers...</sys:String>
+    <sys:String x:Key="Str_Drop_MergeCancelled">Fusion annulée</sys:String>
+    <sys:String x:Key="Str_Dlg_UnsavedCloseAll">Fermer tous les documents ? Les modifications non enregistrées seront perdues.</sys:String>
     <sys:String x:Key="Str_Msg_OpenFirst">Ouvrez d'abord un PDF.</sys:String>
     <sys:String x:Key="Str_Dlg_SaveBeforeZip">Enregistrer les modifications avant de compresser en ZIP ?</sys:String>
     <sys:String x:Key="Str_Status_Zipped">Compressé vers {0} - {1} (était {2})</sys:String>

@@ -11,6 +11,8 @@ using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Docnet.Core;
+using Docnet.Core.Models;
 
 namespace KillerPDF
 {
@@ -27,6 +29,8 @@ namespace KillerPDF
         private readonly int[] _rasterH;
         private readonly double[] _pageDipW;   // true physical page size in DIPs (for exact scaling)
         private readonly double[] _pageDipH;
+        private readonly string  _renderPath;  // annotation-burned source PDF, re-read to rasterize at 300 DPI on print
+        private readonly string? _cleanupPath; // temp flattened file owned by this window; deleted on close
 
         private int _loadedCount;              // pages rendered so far
         private bool _isLoading = true;        // true until every page has rendered
@@ -69,7 +73,8 @@ namespace KillerPDF
         /// <summary>Number of pages sent to the printer (set when the user prints).</summary>
         public int PrintedPageCount { get; private set; }
 
-        public PrintPreviewWindow(Window? owner, int pageCount, double[] pageDipW, double[] pageDipH)
+        public PrintPreviewWindow(Window? owner, int pageCount, double[] pageDipW, double[] pageDipH,
+                                  string renderPath, string? cleanupPath)
         {
             // Pages render lazily on a background thread (fed in via SetRenderedPage), so the
             // window opens instantly and shows a spinner instead of blocking on large files.
@@ -78,6 +83,8 @@ namespace KillerPDF
             _rasterH = new int[pageCount];
             _pageDipW = pageDipW;
             _pageDipH = pageDipH;
+            _renderPath  = renderPath;
+            _cleanupPath = cleanupPath;
 
             Title  = "KillerPDF - Print";
             Width  = 936;
@@ -117,6 +124,8 @@ namespace KillerPDF
             Cancelled = true;   // stop any in-flight background page rendering
             base.OnClosed(e);
             try { _server?.Dispose(); } catch { }
+            // We own the flattened temp (kept alive so Print could re-rasterize at 300 DPI); clean it up.
+            if (_cleanupPath != null) try { System.IO.File.Delete(_cleanupPath); } catch { }
         }
 
         // Clips the content to the card's rounded corners (the rounded border alone doesn't clip
@@ -204,14 +213,14 @@ namespace KillerPDF
 
         // Raster-pixels -> DIP scale factor for a page under the current scale mode.
         // Fit shrinks the page to the printable area; actual/custom use the true physical size.
-        private double ScaleFor(int idx, double areaW, double areaH)
+        private double ScaleFor(int idx, double areaW, double areaH, int[] rw, int[] rh)
         {
-            double actual = _pageDipW[idx] / Math.Max(1, _rasterW[idx]);
+            double actual = _pageDipW[idx] / Math.Max(1, rw[idx]);
             return _scaleMode switch
             {
                 1 => actual,
                 2 => actual * (_customPct / 100.0),
-                _ => Math.Min(areaW / _rasterW[idx], areaH / _rasterH[idx])
+                _ => Math.Min(areaW / rw[idx], areaH / rh[idx])
             };
         }
 
@@ -236,7 +245,8 @@ namespace KillerPDF
         // Builds one sheet (aw x ah DIPs, white) holding the given source pages. 1-up honours the
         // scale mode + alignment + margin; N-up fits each page into its grid cell. Shared by the
         // preview and the print path so what you see is what prints.
-        private Grid ComposeSheet(System.Collections.Generic.List<int> idxs, double aw, double ah)
+        private Grid ComposeSheet(System.Collections.Generic.List<int> idxs, double aw, double ah,
+                                  BitmapSource?[] pages, int[] rw, int[] rh)
         {
             var sheet = new Grid
             {
@@ -251,13 +261,13 @@ namespace KillerPDF
                 if (idxs.Count > 0)
                 {
                     int idx = idxs[0];
-                    double s = ScaleFor(idx, aw - 2 * m, ah - 2 * m);
-                    double iw = _rasterW[idx] * s, ih = _rasterH[idx] * s;
+                    double s = ScaleFor(idx, aw - 2 * m, ah - 2 * m, rw, rh);
+                    double iw = rw[idx] * s, ih = rh[idx] * s;
                     // Snap to the printable area when the page is within a pixel of filling it, so the
                     // white sheet doesn't peek through as a 1px hairline at the page edge (float seam).
                     if (iw >= (aw - 2 * m) - 1.5) iw = aw - 2 * m + 1;   // +1 bleed: covers the right hairline (clipped by the sheet)
                     if (ih >= (ah - 2 * m) - 1.5) ih = ah - 2 * m + 1;
-                    var img = new Image { Source = _pages[idx]!, Width = iw, Height = ih };
+                    var img = new Image { Source = pages[idx]!, Width = iw, Height = ih };
                     RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
                     Canvas.SetLeft(img, m + OffsetH(aw - 2 * m, iw));
                     Canvas.SetTop(img, m + OffsetV(ah - 2 * m, ih));
@@ -274,9 +284,9 @@ namespace KillerPDF
                     int idx = idxs[i];
                     int row = i / cols, col = i % cols;
                     double availW = Math.Max(1, cellW - gap), availH = Math.Max(1, cellH - gap);
-                    double s = Math.Min(availW / _rasterW[idx], availH / _rasterH[idx]);
-                    double iw = _rasterW[idx] * s, ih = _rasterH[idx] * s;
-                    var img = new Image { Source = _pages[idx]!, Width = iw, Height = ih };
+                    double s = Math.Min(availW / rw[idx], availH / rh[idx]);
+                    double iw = rw[idx] * s, ih = rh[idx] * s;
+                    var img = new Image { Source = pages[idx]!, Width = iw, Height = ih };
                     RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
                     Canvas.SetLeft(img, m + col * cellW + (cellW - iw) / 2);
                     Canvas.SetTop(img, m + row * cellH + (cellH - ih) / 2);
@@ -761,7 +771,7 @@ namespace KillerPDF
                 return;
             }
 
-            var paper = ComposeSheet(idxs, _areaW, _areaH);
+            var paper = ComposeSheet(idxs, _areaW, _areaH, _pages, _rasterW, _rasterH);
 
             var vb = new Viewbox
             {
@@ -887,6 +897,24 @@ namespace KillerPDF
                 else            { if (aw > ah) (aw, ah) = (ah, aw); }
                 if (aw <= 0 || ah <= 0) { aw = _areaW; ah = _areaH; }
 
+                // Re-rasterize ONLY the selected pages at a true 300 DPI from the source, so the spooled
+                // output is crisp regardless of the lighter preview rasters. Held only for this print call.
+                var hiPages = new BitmapSource?[_pages.Length];
+                var hiW = new int[_pages.Length];
+                var hiH = new int[_pages.Length];
+                using (var dr = DocLib.Instance.GetDocReader(_renderPath, new PageDimensions(300.0 / 72.0)))
+                {
+                    foreach (int idx in indices)
+                    {
+                        if (idx < 0 || idx >= _pages.Length) continue;
+                        using var pr = dr.GetPageReader(idx);
+                        int w = pr.GetPageWidth(), h = pr.GetPageHeight();
+                        var bs = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, pr.GetImage(), w * 4);
+                        bs.Freeze();
+                        hiPages[idx] = bs; hiW[idx] = w; hiH[idx] = h;
+                    }
+                }
+
                 var fixedDoc = new FixedDocument();
                 // Group the selected pages into sheets of _nUp and compose each sheet (margins +
                 // alignment + scale are all handled inside ComposeSheet, shared with the preview).
@@ -895,7 +923,7 @@ namespace KillerPDF
                     var chunk = indices.Skip(start).Take(_nUp).ToList();
 
                     var fp = new FixedPage { Width = aw, Height = ah };
-                    var sheet = ComposeSheet(chunk, aw, ah);
+                    var sheet = ComposeSheet(chunk, aw, ah, hiPages, hiW, hiH);
                     FixedPage.SetLeft(sheet, 0);
                     FixedPage.SetTop(sheet, 0);
                     fp.Children.Add(sheet);

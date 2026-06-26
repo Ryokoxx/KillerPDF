@@ -37,9 +37,8 @@ namespace KillerPDF
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
-                var files = (string[])e.Data.GetData(DataFormats.FileDrop)!;
-                if (files.Length > 0 && files[0].EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
-                    OpenInNewTab(files[0]);
+                OnPathsDropped((string[])e.Data.GetData(DataFormats.FileDrop)!);
+                e.Handled = true;   // don't let the same drop bubble to the window-level handler
             }
         }
 

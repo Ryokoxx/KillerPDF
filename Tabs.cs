@@ -456,6 +456,38 @@ namespace KillerPDF
             RebuildTabStrip();
         }
 
+        // Ctrl+Q: close every open document and reset to a single blank tab, with one combined warning
+        // if anything is unsaved (rather than a prompt per tab).
+        private void CloseAllTabs()
+        {
+            EnsureInitialSession();
+            CommitActiveTextBox();
+            if (_active != null) CaptureSessionState(_active);
+
+            var docTabs = _sessions.Where(t => t.Doc != null || t.DeferredPath != null).ToList();
+            if (docTabs.Count == 0) return;
+
+            if (docTabs.Any(t => t.IsDirty))
+            {
+                var res = KillerDialog.Show(this, Loc("Str_Dlg_UnsavedCloseAll"),
+                    "KillerPDF", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (res != MessageBoxResult.Yes) { RebuildTabStrip(); return; }
+            }
+
+            foreach (var s in docTabs) { try { s.Doc?.Close(); } catch { } }
+            try { _doc?.Close(); } catch { }
+            _doc = null;
+
+            _sessions.Clear();
+            App.RemoveSetting("LastFile");   // a manually emptied window won't reopen on launch
+            var blank = new DocumentSession();
+            _sessions.Add(blank);
+            _active = blank;
+            ApplySessionState(blank);
+            ShowEmptyState();
+            RebuildTabStrip();
+        }
+
         // External (single-instance) entry points, called from App when a second launch forwards
         // a file path to this already-running instance.
         public void OpenFromExternal(string? path)

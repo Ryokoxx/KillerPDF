@@ -7,48 +7,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this
 ## [1.5.9] - 2026-06-25
 
 ### Added
-- Line tool: drag to draw straight lines, with its own color, opacity, and width.
-- Resizable, word-wrapping text boxes (double-click to re-edit) with an optional background fill for whiteouts, color, and opacity.
-- Updated highlighter and draw bars with color and opacity controls.
-- Select tool moves and resizes any annotation, Shift+click to multi-select, and reopens an annotation's bar to restyle it in place.
-- Full RGB color picker on every swatch row: saturation/value square, hue strip, RGB/hex inputs, a screen eyedropper, and an editable palette.
 - Tabbed documents: open several PDFs at once, each restoring its page, zoom, and view mode. Drag tabs to re-order.
-- Recent files: a dropdown by Open (last 10) and on the start screen, plus a Save / Save As dropdown.
-- One-click update from the About dialog when a newer release exists.
+- OCR built into the single exe (Tesseract): OCR a whole page or a dragged region to the clipboard, Make Searchable PDF (an invisible text layer over the scan), and Extract All Text to a .txt or .md file. A language picker downloads extra languages on demand, with an optional high-quality model toggle.
+- Digital signatures with a cloud certificate (Certum SimplySign): reusable signatures and initials, click-to-sign form fields, and a movable Signatures popup that remembers its position.
+- Transform tool: rotate in 90-degree steps or by a fine angle, scale, flip, and straighten a crooked scan by drawing a line along anything that should be level, all with a live preview. Annotations on the page follow the transform.
+- Annotation tools: Line tool plus refreshed draw and highlighter bars, each with its own color, opacity, and width; resizable, word-wrapping text boxes (double-click to re-edit) with an optional whiteout background fill.
+- Select tool moves and resizes any annotation, Shift+click to multi-select, marquee-selects across page boundaries, and reopens an annotation's bar to restyle it in place.
+- Full RGB color picker on every swatch row: saturation/value square, hue strip, RGB/hex inputs, a screen eyedropper, and an editable palette.
 - Print options: scale, position, margins, pages per sheet, color / black-and-white, and two-sided.
 - Page-number stamping from the right-click menu (start value, format, position, size) as one undo.
-- OCR built into the single exe (Tesseract): OCR a whole page or a dragged region to the clipboard, Make Searchable PDF (an invisible text layer over the scan), and Extract All Text to a .txt or .md file. A language picker downloads extra languages on demand, with an optional high-quality model toggle.
-- Transform tool: rotate in 90-degree steps or by a fine angle, scale, flip, and straighten a crooked scan by drawing a line along anything that should be level, all with a live preview. Annotations on the page follow the transform.
-- "Clear all Data" link in the About window to wipe settings, downloaded OCR language models, and temp files.
+- Drop a folder or .zip archive onto the window to open the PDFs and images inside, choosing to merge them into one PDF or open each in its own tab.
+- Document Info dialog (F12): view and edit a PDF's title, author, subject, keywords, and creator metadata.
+- Recent files: a dropdown by Open (last 10) and on the start screen, plus a Save / Save As dropdown.
+- Keyboard shortcuts for tools, views, and panels (F1 shortcuts list, F2 About, Ctrl+V paste, Esc to close, F5-F8 view modes, F11 fullscreen...); the overlay lists them all.
 - Per-field font size while filling text fields, baked into the saved PDF.
-- Digital signatures with a cloud certificate (Certum SimplySign): reusable signatures and initials, and click-to-sign form fields.
-- Movable Signatures popup, its position remembered.
+- One-click update from the About dialog when a newer release exists.
 - Toolbar style picker: small or large icons, text beside, under, or only.
 - Sidebar is resizable and can be placed either left or right, with the collapse toggle, splitter, and Settings flyout mirroring to match.
 - Accent colors (red, orange, green, teal, blue, purple) for the Dark, Light, and Black themes, each remembered independently.
-- Keyboard shortcuts for tools, views, and panels (F1 shortcuts list, F2 About, Ctrl+V paste, Esc to close, f5-f8 view modes, f11 fullscreen...); the overlay lists them all.
+- "Clear all Data" link in the About window to wipe settings, downloaded OCR language models, and temp files.
 - Bengali, Turkish, Simplified Chinese, German, and French translations (contributors akib-h #79, mrantikadev #76, KaneLeung #82, Dtrieb & Gevlug #93, Thalis-fr #95).
 
 ### Changed
-- Visual refresh.
+- Visual refresh: new logo, wordmark, app and PDF-file icons, fonts, and colors throughout.
 - Blood, Greed, and Cyanotic use darker chrome with a lighter document pane; the signature windows are fully themed and reload on theme change.
 - Settings is now a slide-out accordion (Language, Theme, Toolbar, View Mode, Sidebar) that stays open after a pick.
+- Crop tool rebuilt as a single docked, slidable bar matching the annotation bars.
 - Text-over-text editing drops an opaque cover (fill sampled from the page) with an editable box on top; the pair can be unpaired, and image-only pages get a manual cover and box.
+- Unified the page-rendering pipeline so annotations, search highlights, and tools behave identically across Single, Continuous, Two-Page, and Grid views.
 - Grid and Two-Page pages render sharper on high-DPI displays.
 - Restored sessions load tabs lazily, and placed images no longer re-decode while being dragged.
 - Save Flattened opens the source PDF once instead of per page (Issue #68).
 - Internal refactor: the ~15,000-line MainWindow code-behind split into ~40 focused partial-class files, no behavior change.
-- Unified the page-rendering pipeline so annotations, search highlights, and tools behave identically across Single, Continuous, Two-Page, and Grid views.
-- Crop tool rebuilt as a single docked, slidable bar matching the annotation bars.
 
 ### Fixed
+- Prints now rasterize at a true 300 DPI instead of the preview's ~140, so output is sharp; the preview itself renders lighter and only the pages being printed are re-rendered at full resolution, keeping memory in check on large files (Issue #83).
+- Printing and Save Flattened no longer crash on documents PdfSharpCore can't reopen; they use the same repair fallback as Save.
+- Opening an encrypted PDF or repairing a damaged one runs on a background thread instead of freezing the window.
+- A manually-closed PDF no longer reopens on next launch (Issue #75).
 - Form fields appear and fill in every view mode, align on pages with an inset CropBox or offset origin, and size their text from the field's own /DA.
+- Grid view: the wheel keeps scrolling after a zoom or column change, page jumps fit correctly (Issue #78), and annotations commit to the page they were drawn on.
 - Undo removes one item per press; a held Ctrl+Z no longer fires several at once.
 - Clear All Annotations clears every view mode as one undo; right-click Clear Page Annotations targets the correct page.
-- Grid view: the wheel keeps scrolling after a zoom or column change, page jumps fit correctly (Issue #78), and annotations commit to the page they were drawn on.
-- Opening an encrypted PDF or repairing a damaged one runs on a background thread instead of freezing the window.
-- Printing and Save Flattened no longer crash on documents PdfSharpCore can't reopen; they use the same repair fallback as Save.
-- A manually-closed PDF no longer reopens on next launch (Issue #75).
 - Search waits for a pause in typing before running; the Outlines panel scrolls and no longer auto-expands every branch.
 - Pressing Esc during a long OCR, repair, or flatten operation asks whether to cancel instead of closing the window.
 

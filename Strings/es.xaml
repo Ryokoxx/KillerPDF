@@ -73,6 +73,7 @@
     <sys:String x:Key="Str_KS_File">ARCHIVO</sys:String>
     <sys:String x:Key="Str_KS_Open">Abrir</sys:String>
     <sys:String x:Key="Str_KS_CloseFile">Cerrar archivo</sys:String>
+    <sys:String x:Key="Str_KS_CloseAll">Cerrar todo</sys:String>
     <sys:String x:Key="Str_KS_NewBlank">Nuevo documento en blanco</sys:String>
     <sys:String x:Key="Str_KS_SaveAs">Guardar como</sys:String>
     <sys:String x:Key="Str_KS_Print">Imprimir</sys:String>
@@ -296,6 +297,15 @@ Puede desinstalarla en cualquier momento desde Agregar o quitar programas.</sys:
     <sys:String x:Key="Str_Status_Imported">{0} imagen(es) importada(s) - sin guardar todavía</sys:String>
     <sys:String x:Key="Str_Err_ImportFailed">Error al importar:</sys:String>
     <sys:String x:Key="Str_Err_NoImages">No se pudo leer ninguna imagen.</sys:String>
+    <sys:String x:Key="Str_Drop_Prompt">Has soltado {0} archivos. ¿Cómo quieres abrirlos?</sys:String>
+    <sys:String x:Key="Str_Drop_Merge">Combinar en un solo PDF</sys:String>
+    <sys:String x:Key="Str_Drop_Separate">Abrir por separado</sys:String>
+    <sys:String x:Key="Str_Drop_NothingOpenable">No se encontraron PDF ni imágenes para abrir.</sys:String>
+    <sys:String x:Key="Str_Drop_ManyTabs">Esto abrirá {0} pestañas separadas. ¿Continuar?</sys:String>
+    <sys:String x:Key="Str_Status_Merged">{0} archivos combinados - sin guardar todavía</sys:String>
+    <sys:String x:Key="Str_Drop_Merging">Combinando archivos...</sys:String>
+    <sys:String x:Key="Str_Drop_MergeCancelled">Combinación cancelada</sys:String>
+    <sys:String x:Key="Str_Dlg_UnsavedCloseAll">¿Cerrar todos los documentos? Se perderán los cambios sin guardar.</sys:String>
     <sys:String x:Key="Str_Msg_OpenFirst">Primero abre un PDF.</sys:String>
     <sys:String x:Key="Str_Dlg_SaveBeforeZip">¿Guardar los cambios antes de comprimir a ZIP?</sys:String>
     <sys:String x:Key="Str_Status_Zipped">Comprimido en {0} - {1} (antes {2})</sys:String>
