@@ -2,7 +2,7 @@
 
 Free and open-source PDF editor for Windows. View, annotate, OCR, merge, split, edit text, draw, sign, fill forms, print, flatten, and open password-protected PDFs without an Adobe subscription or a phone-home. Install or run portable. Single Windows EXE, ~14.6 MB (ZIPs to 10.2MB), no runtime install required.
 
-Landing page is hosted at [killerpdf.net](https://killerpdf.net)
+Landing page is hosted at [KillerPDF.net](https://killerpdf.net)
 
 ## Why this exists
 

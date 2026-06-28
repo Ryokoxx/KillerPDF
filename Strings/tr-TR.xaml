@@ -8,6 +8,10 @@
 
     <!-- ── Araç çubuğu ipuçları ─────────────────────────────────────── -->
     <sys:String x:Key="Str_TT_Open">Aç (Ctrl+O)</sys:String>
+
+    <!-- ── Drop zone / empty state ──────────────────────────────────── -->
+    <sys:String x:Key="Str_Drop_Title">PDF'yi buraya bırakın</sys:String>
+    <sys:String x:Key="Str_Drop_Sub">veya göz atmak için tıklayın</sys:String>
     <sys:String x:Key="Str_TT_NewBlank">Yeni Boş Belge (Ctrl+N)</sys:String>
     <sys:String x:Key="Str_TT_CloseFile">Dosyayı Kapat (Ctrl+W)</sys:String>
     <sys:String x:Key="Str_TT_Save">Kaydet (Ctrl+S)</sys:String>

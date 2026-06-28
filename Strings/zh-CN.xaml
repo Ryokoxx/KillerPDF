@@ -8,6 +8,10 @@
 
     <!-- ── Toolbar tooltips ─────────────────────────────────────────── -->
     <sys:String x:Key="Str_TT_Open">打开 (Ctrl+O)</sys:String>
+
+    <!-- ── Drop zone / empty state ──────────────────────────────────── -->
+    <sys:String x:Key="Str_Drop_Title">将 PDF 拖放到此处</sys:String>
+    <sys:String x:Key="Str_Drop_Sub">或点击浏览</sys:String>
     <sys:String x:Key="Str_TT_NewBlank">添加空白文档 (Ctrl+N)</sys:String>
     <sys:String x:Key="Str_TT_CloseFile">关闭文件 (Ctrl+W)</sys:String>
     <sys:String x:Key="Str_TT_Save">保存 (Ctrl+S)</sys:String>

@@ -1753,7 +1753,7 @@ namespace KillerPDF
                     {
                         if (!_annotations.TryGetValue(p, out var apg) || apg.Count == 0) continue;
                         var pc = _pages[p];
-                        Rect inP = MapRect(gc, pc, startRect);
+                        Rect inP = MapRect(gc!, pc, startRect);
                         foreach (var a in apg)
                         {
                             if (!IsDraggable(a)) continue;

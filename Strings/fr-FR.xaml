@@ -9,6 +9,10 @@
 
     <!-- Toolbar tooltips -->
     <sys:String x:Key="Str_TT_Open">Ouvrir document (Ctrl+O)</sys:String>
+
+    <!-- Drop zone / empty state -->
+    <sys:String x:Key="Str_Drop_Title">Déposez le PDF ici</sys:String>
+    <sys:String x:Key="Str_Drop_Sub">ou cliquez pour parcourir</sys:String>
     <sys:String x:Key="Str_TT_NewBlank">Nouveau document (Ctrl+N)</sys:String>
     <sys:String x:Key="Str_TT_CloseFile">Fermer document (Ctrl+W)</sys:String>
     <sys:String x:Key="Str_TT_SaveAs">Enregistrer sous (Ctrl+Maj+S)</sys:String>

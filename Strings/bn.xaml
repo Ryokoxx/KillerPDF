@@ -8,6 +8,10 @@
 
     <!-- ── Toolbar tooltips ─────────────────────────────────────────── -->
     <sys:String x:Key="Str_TT_Open">খুলুন (Ctrl+O)</sys:String>
+
+    <!-- ── Drop zone / empty state ──────────────────────────────────── -->
+    <sys:String x:Key="Str_Drop_Title">এখানে PDF ছেড়ে দিন</sys:String>
+    <sys:String x:Key="Str_Drop_Sub">অথবা ব্রাউজ করতে ক্লিক করুন</sys:String>
     <sys:String x:Key="Str_TT_NewBlank">নতুন ফাঁকা নথি (Ctrl+N)</sys:String>
     <sys:String x:Key="Str_TT_CloseFile">ফাইল বন্ধ করুন (Ctrl+W)</sys:String>
     <sys:String x:Key="Str_TT_Save">সংরক্ষণ করুন (Ctrl+S)</sys:String>

@@ -11,6 +11,10 @@
     <sys:String x:Key="Str_TT_NewBlank">New Blank Document (Ctrl+N)</sys:String>
     <sys:String x:Key="Str_TT_CloseFile">Close File (Ctrl+W)</sys:String>
     <sys:String x:Key="Str_TT_Save">Save (Ctrl+S)</sys:String>
+
+    <!-- ── Drop zone / empty state ──────────────────────────────────── -->
+    <sys:String x:Key="Str_Drop_Title">Drop PDF here</sys:String>
+    <sys:String x:Key="Str_Drop_Sub">or click to browse</sys:String>
     <sys:Double x:Key="ZoomBoxWidth">96</sys:Double>
     <sys:String x:Key="Str_TT_SaveAs">Save As (Ctrl+Shift+S)</sys:String>
     <sys:String x:Key="Str_TT_SaveFlattened">Save Flattened PDF (rasterize all pages — fully uneditable)</sys:String>
