@@ -1,6 +1,6 @@
 # KillerPDF
 
-Free and open-source PDF editor for Windows. View, annotate, OCR, merge, split, edit text, draw, sign, fill forms, print, flatten, and open password-protected PDFs without an Adobe subscription or a phone-home. Install or run portable. Single Windows EXE, ~6 MB zipped, no runtime install required.
+Free and open-source PDF editor for Windows. View, annotate, OCR, merge, split, edit text, draw, sign, fill forms, print, flatten, and open password-protected PDFs without an Adobe subscription or a phone-home. Install or run portable. Single Windows EXE, ~14.6 MB (ZIPs to 10.2MB), no runtime install required.
 
 Landing page is hosted at [killerpdf.net](https://killerpdf.net)
 
@@ -96,12 +96,6 @@ WinGet:
 
 ```powershell
 winget install killerpdf
-```
-
-Chocolatey:
-
-```powershell
-choco install killerpdf
 ```
 
 - Prebuilt binary: <https://github.com/SteveTheKiller/KillerPDF/releases/latest/download/KillerPDF.exe>
