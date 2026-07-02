@@ -109,6 +109,8 @@ namespace KillerPDF
                 (_selectRect.Parent as Canvas)?.Children.Remove(_selectRect);
                 _selectRect = null;
             }
+            CancelTextDrag();                // cancel any in-progress flowing drag + free its capture
+            ClearTextSelectionHighlight();   // and drop the word/char highlight rects + forget the range
             _selectedText = null;
         }
 
