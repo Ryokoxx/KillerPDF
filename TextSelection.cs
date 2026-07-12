@@ -194,8 +194,6 @@ namespace KillerPDF
         private int  _textDragPage   = -1;                     // page the flowing selection is on (v1: single page)
         private Point _textDragStartPt;                        // canvas point the drag began at (click-vs-drag test)
 
-        // Legacy box text-selection (Settings toggle). Default off = familiar flowing drag selection.
-        private bool BoxTextSelectMode => App.GetSetting("BoxTextSelect") == "1";
 
         /// <summary>
         /// Double-click entry: selects the word under a canvas point on pageIndex. Returns false if there's

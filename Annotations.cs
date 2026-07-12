@@ -1080,9 +1080,9 @@ namespace KillerPDF
                             ClearTextSelection();
                             if (_viewMode == ViewMode.Grid && !shiftSel) PageList.SelectedIndex = pageIdx;  // grid: click selects the page
                             // Familiar flowing text selection: a plain click on the PDF's text starts a
-                            // click-drag character selection. Shift-drag, box mode, or a click on blank
-                            // space fall through to the marquee (annotation multi-select / OCR / legacy box).
-                            if (!shiftSel && !_ocrRegionMode && !BoxTextSelectMode && TextBeginDrag(pageIdx, pos))
+                            // click-drag character selection. Shift-drag or a click on blank space falls
+                            // through to the marquee (annotation multi-select / OCR).
+                            if (!shiftSel && !_ocrRegionMode && TextBeginDrag(pageIdx, pos))
                             {
                                 _activeCanvas.CaptureMouse();
                                 e.Handled = true;
@@ -1127,10 +1127,10 @@ namespace KillerPDF
                 case EditTool.Strikethrough:
                 case EditTool.Underline:
                     ClearSelection();
-                    // Text highlight: with the Highlight tool over the PDF's text (not the eraser, not box
-                    // mode), drag to highlight the actual text runs (flowing), like a real highlighter. Falls
-                    // through to the freeform box for non-text, the eraser, box mode, and strike/underline.
-                    if (_currentTool == EditTool.Highlight && !_highlightErase && !BoxTextSelectMode
+                    // Text highlight: with the Highlight tool over the PDF's text (not the eraser), drag to
+                    // highlight the actual text runs (flowing), like a real highlighter. Falls through to
+                    // the freeform box for non-text, the eraser, and strike/underline.
+                    if (_currentTool == EditTool.Highlight && !_highlightErase
                         && TextBeginDrag(pageIdx, pos))
                     {
                         _activeCanvas.CaptureMouse();
@@ -1863,13 +1863,8 @@ namespace KillerPDF
                         foreach (var (a, b, cv) in hits) ToggleMultiSelect(a, b, cv);
                         SetStatus($"Selected {hits.Count} annotation{(hits.Count == 1 ? "" : "s")}");
                     }
-                    else if (BoxTextSelectMode)
-                    {
-                        // Legacy box text-selection (opt-in): copy the words inside the dragged rectangle.
-                        // In the default flowing mode this path is skipped - a blank-area drag that caught
-                        // no annotations simply selects nothing.
-                        ExtractTextFromRegion(pageIdx, startRect);
-                    }
+                    // A blank-area drag that caught no annotations selects nothing - text selection
+                    // is the flowing character selection, started on mouse-down over text.
                 }
                 return;
             }
