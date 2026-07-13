@@ -17,7 +17,6 @@ using PdfSharpCore.Drawing;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
 using KillerPDF.Services;
-using PdfPigDoc = UglyToad.PdfPig.PdfDocument;
 
 namespace KillerPDF
 {
@@ -45,44 +44,29 @@ namespace KillerPDF
             return new SolidColorBrush(Color.FromArgb(alpha, (byte)(c.R * 0.6), (byte)(c.G * 0.6), (byte)(c.B * 0.6)));
         }
 
+        // Select-all on the current page, via the same PDFium text engine as the flowing selection: the
+        // whole page becomes one text selection (per-line highlight on the right tile, Ctrl+C-able),
+        // instead of the old PdfPig full-document reopen + a full-canvas box on the primary canvas
+        // (which was the wrong tile in grid/continuous view).
         private void SelectAllText()
         {
             if (_currentFile is null) return;
             int pageIdx = PageList.SelectedIndex;
             if (pageIdx < 0) return;
 
-            try
+            IntPtr tp = EnsureTextPage(pageIdx);
+            int total = tp == IntPtr.Zero ? 0 : FPDFText_CountChars(tp);
+            string text = total > 0 ? TextRangeString(pageIdx, 0, total) : string.Empty;
+            if (string.IsNullOrWhiteSpace(text))
             {
-                using var pigDoc = PdfPigDoc.Open(_currentFile);
-                if (pageIdx >= pigDoc.NumberOfPages) return;
-                var page = pigDoc.GetPage(pageIdx + 1);
-                _selectedText = WordsToText(page.GetWords());
-                if (string.IsNullOrWhiteSpace(_selectedText))
-                {
-                    SetStatus(Loc("Str_St_NoTextOnPage"));
-                    return;
-                }
-                Clipboard.SetText(_selectedText);
-                // Visual feedback: highlight entire canvas
-                ClearTextSelection();
-                _selectRect = new Rectangle
-                {
-                    Fill = new SolidColorBrush(Color.FromArgb(30, 74, 130, 255)),
-                    Stroke = new SolidColorBrush(Color.FromArgb(80, 74, 130, 255)),
-                    StrokeThickness = 1,
-                    Width = _annotationCanvas.Width,
-                    Height = _annotationCanvas.Height,
-                    IsHitTestVisible = false
-                };
-                Canvas.SetLeft(_selectRect, 0);
-                Canvas.SetTop(_selectRect, 0);
-                _annotationCanvas.Children.Add(_selectRect);
-                SetStatus($"Selected all text - copied to clipboard");
+                SetStatus(Loc("Str_St_NoTextOnPage"));
+                return;
             }
-            catch (Exception ex)
-            {
-                SetStatus($"Select all error: {ex.Message}");
-            }
+            ClearTextSelection();
+            RenderTextSelection(pageIdx, 0, total);
+            _selectedText = text;
+            TrySetClipboard(text);
+            SetStatus($"Selected all text - copied to clipboard");
         }
 
         private void CopySelectedText()

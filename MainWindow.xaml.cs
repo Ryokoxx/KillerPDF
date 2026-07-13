@@ -17,7 +17,6 @@ using PdfSharpCore.Drawing;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
 using KillerPDF.Services;
-using PdfPigDoc = UglyToad.PdfPig.PdfDocument;
 
 namespace KillerPDF
 {
@@ -694,40 +693,5 @@ namespace KillerPDF
         // Search (Ctrl+F)
         // ============================================================
 
-        /// <summary>
-        /// Converts a collection of PdfPig words to a properly ordered string.
-        /// Sorts top-to-bottom then left-to-right, groups into lines using a
-        /// dynamic threshold (~40% of average word height) so words at slightly
-        /// different baselines still land on the correct line.
-        /// </summary>
-        private static string WordsToText(IEnumerable<UglyToad.PdfPig.Content.Word> source)
-        {
-            var words = source
-                .OrderByDescending(w => w.BoundingBox.Top)
-                .ThenBy(w => w.BoundingBox.Left)
-                .ToList();
-            if (words.Count == 0) return string.Empty;
-
-            // Dynamic threshold: 40% of average word height, minimum 4 PDF units
-            double avgH   = words.Average(w => w.BoundingBox.Height);
-            double thresh = Math.Max(4.0, avgH * 0.4);
-
-            var lines = new List<List<UglyToad.PdfPig.Content.Word>>();
-            double lineY = double.MaxValue;
-            foreach (var w in words)
-            {
-                if (Math.Abs(w.BoundingBox.Top - lineY) > thresh)
-                {
-                    lines.Add([]);
-                    lineY = w.BoundingBox.Top;
-                }
-                lines[^1].Add(w);
-            }
-
-            // Re-sort each line by X in case the top-Y sort caused any grouping
-            // to pull words into the wrong order within a line.
-            return string.Join("\n", lines.Select(l =>
-                string.Join(" ", l.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text))));
-        }
     }
 }
