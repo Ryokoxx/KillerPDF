@@ -168,18 +168,27 @@ namespace KillerPDF
             return (start, end - start + 1);
         }
 
-        // Selection rectangles (canvas render-dim space) for a char range - one per visual line run.
+        // Selection rectangles (canvas render-dim space) for a char range - one per visual line run,
+        // with a little vertical breathing room like a real highlighter stroke: the pen overshoots the
+        // glyphs above and below, never sideways. Proportional so it scales with the text size, small
+        // enough that consecutive lines don't visibly double up where translucent fills overlap. Clamped
+        // to the page. Both consumers (drag-selection rects, committed highlight annotations) want it.
         private List<Rect> TextRangeRects(int pageIndex, int start, int count)
         {
             var rects = new List<Rect>();
             IntPtr tp = EnsureTextPage(pageIndex);
             if (tp == IntPtr.Zero || count <= 0) return rects;
+            _renderDims.TryGetValue(pageIndex, out var rd);
             int n = FPDFText_CountRects(tp, start, count);
             for (int i = 0; i < n; i++)
                 if (FPDFText_GetRect(tp, i, out double l, out double t, out double r, out double b))
                 {
                     var rect = PdfRectToCanvasRect(pageIndex, l, t, r, b);
-                    if (rect.Width >= 0.5 && rect.Height >= 0.5) rects.Add(rect);
+                    if (rect.Width < 0.5 || rect.Height < 0.5) continue;
+                    double pad = rect.Height * 0.14;   // ponytail: tuned by eye; make it a named const if it grows more callers
+                    double top = Math.Max(0, rect.Y - pad);
+                    double bottom = rd.h > 0 ? Math.Min(rd.h, rect.Y + rect.Height + pad) : rect.Y + rect.Height + pad;
+                    rects.Add(new Rect(rect.X, top, rect.Width, bottom - top));
                 }
             return rects;
         }
