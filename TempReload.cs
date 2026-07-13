@@ -41,6 +41,7 @@ namespace KillerPDF
             InvalidateRenderCache(_active);   // pages changed pixels / order: drop this tab's cached bitmaps
             _renderedPrimaryPage = -1;        // force a re-render after reload even if the same page stays selected (e.g. rotate)
             ClearSelection();
+            ClearTextSelection();   // page/char indices are meaningless in the reloaded document (and cancels a mid-drag)
             MarkDirty();
             var doc = _doc;
             int selectedIdx = PageList.SelectedIndex;

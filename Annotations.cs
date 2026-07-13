@@ -1535,10 +1535,11 @@ namespace KillerPDF
                 return;
             }
 
-            // Flowing text selection: extend to the char under the pointer.
+            // Flowing text selection: extend to the char under the pointer - the pointer is resolved
+            // against every live page tile inside, so the selection can flow across pages.
             if (_textDragging)
             {
-                TextExtendDrag(e.GetPosition(gc));
+                TextExtendDrag();
                 return;
             }
 
@@ -1778,8 +1779,10 @@ namespace KillerPDF
             if (_textDragging)
             {
                 var gcv = _gestureCanvas ?? _activeCanvas;
-                var upPos = e.GetPosition(gcv);
-                bool moved = Math.Abs(upPos.X - _textDragStartPt.X) >= 4 || Math.Abs(upPos.Y - _textDragStartPt.Y) >= 4;
+                // Click-vs-drag in SCROLLER space, not canvas units: the overlay canvases are render-dim
+                // scaled, so a fixed canvas-unit threshold varies wildly with zoom and view mode.
+                var upPos = e.GetPosition(PagePreviewPanel);
+                bool moved = Math.Abs(upPos.X - _textDragStartScreen.X) >= 4 || Math.Abs(upPos.Y - _textDragStartScreen.Y) >= 4;
                 if (!moved)                                  ClearTextSelection();
                 else if (_currentTool == EditTool.Highlight) CommitTextHighlight();
                 else                                         TextEndDrag();
@@ -2481,13 +2484,19 @@ namespace KillerPDF
             }
             else if (entry.Kind == UndoKind.AnnotationGroup && entry.AnnotGroup is not null)
             {
-                // A grouped edit (text cover + replacement text). Remove the exact annotations recorded,
-                // so one Ctrl+Z cancels the whole edit.
-                int pageIdx = entry.PageIdx;
-                if (_annotations.TryGetValue(pageIdx, out var pageList))
-                    foreach (var a in entry.AnnotGroup) pageList.Remove(a);
+                // A grouped edit (text cover + replacement text, or a cross-page text highlight). Remove the
+                // exact annotations recorded - each from its OWN page - so one Ctrl+Z cancels the whole edit.
+                var touched = new HashSet<int>();
+                foreach (var a in entry.AnnotGroup)
+                {
+                    if (_annotations.TryGetValue(a.PageIndex, out var pageList)) pageList.Remove(a);
+                    touched.Add(a.PageIndex);
+                }
                 ClearSelection();
-                RenderAllAnnotations(pageIdx);
+                // Guard like the StampBatch undo: repainting a page with no live tile would fall back to
+                // the primary canvas and stomp the visible page; tile-less pages repaint on stream-in.
+                foreach (var p in touched)
+                    if (_pages.ContainsKey(p)) RenderAllAnnotations(p);
                 MarkDirty(entry.WasDirty);
                 SetStatus(Loc("Str_St_UndidTextEdit"));
             }
@@ -2553,6 +2562,7 @@ namespace KillerPDF
                 _annotations.Clear();
                 _renderDims.Clear();
                 ClearSelection();
+                ClearTextSelection();   // the restored document invalidates any text-selection page/char indices
                 MarkDirty(entry.WasDirty);
                 RefreshPageList();
                 LoadOutlines();   // #133: bookmark edits ride this undo path, and page-level undos can change the outline too
