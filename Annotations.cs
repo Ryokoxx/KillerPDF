@@ -2447,7 +2447,12 @@ namespace KillerPDF
                 }
                 int[] pages = entry.Kind switch
                 {
-                    UndoKind.Annotation or UndoKind.AnnotationGroup => [entry.PageIdx],
+                    UndoKind.Annotation => [entry.PageIdx],
+                    // A group can span pages (a text highlight over a cross-page selection), so snapshot
+                    // every page it touches - PageIdx alone would leave the other pages unrestorable on redo.
+                    UndoKind.AnnotationGroup => entry.AnnotGroup is null
+                        ? [entry.PageIdx]
+                        : [.. entry.AnnotGroup.Select(a => a.PageIndex).Distinct()],
                     UndoKind.StampBatch => entry.Pages ?? [],
                     _ => entry.AnnotSnapshot is null ? [] : [.. entry.AnnotSnapshot.Keys],
                 };

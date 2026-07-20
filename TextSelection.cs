@@ -521,7 +521,7 @@ namespace KillerPDF
             bool wasDirty = _isDirty;
             ClearTextSelection();   // drop the transient selection highlight + reset range/drag
             if (group.Count == 0) return;
-            _undoStack.Push(new UndoEntry(UndoKind.AnnotationGroup, firstPage, WasDirty: wasDirty, AnnotGroup: group));
+            PushUndo(new UndoEntry(UndoKind.AnnotationGroup, firstPage, WasDirty: wasDirty, AnnotGroup: group));
             MarkDirty();
             // Only repaint pages with a live tile: RenderAllAnnotations falls back to the PRIMARY canvas
             // for an unbuilt page and would stomp the visible page (same guard as the StampBatch undo).

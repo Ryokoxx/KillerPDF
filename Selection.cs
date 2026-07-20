@@ -51,7 +51,13 @@ namespace KillerPDF
         private void SelectAllText()
         {
             if (_currentFile is null) return;
-            int pageIdx = PageList.SelectedIndex;
+            // Prefer the page the live selection starts on, so dragging on one page then hitting Ctrl+A
+            // widens THAT page rather than whichever page the viewport happens to centre on (the current
+            // page is viewport-driven in continuous/grid view). Only when that page is still on screen -
+            // otherwise a stale selection would silently copy a page the user scrolled away from.
+            int pageIdx = HasTextSelection && VisibleCanvasForPage(_selStart.page) is not null
+                ? _selStart.page
+                : PageList.SelectedIndex;
             if (pageIdx < 0) return;
 
             IntPtr tp = EnsureTextPage(pageIdx);
