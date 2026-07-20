@@ -23,22 +23,49 @@ namespace KillerPDF
         // Y down. CanvasToPdfPoint / PdfRectToCanvasRect below convert between them.
         // ============================================================
 
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern IntPtr FPDFText_LoadPage(IntPtr page);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void FPDFText_ClosePage(IntPtr textPage);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int FPDFText_CountChars(IntPtr textPage);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int FPDFText_GetCharIndexAtPos(IntPtr textPage, double x, double y, double xTolerance, double yTolerance);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern uint FPDFText_GetUnicode(IntPtr textPage, int index);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int FPDFText_CountRects(IntPtr textPage, int startIndex, int count);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern bool FPDFText_GetRect(IntPtr textPage, int rectIndex, out double left, out double top, out double right, out double bottom);
-        [DllImport("pdfium.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int FPDFText_GetText(IntPtr textPage, int startIndex, int count, [Out] ushort[] result);
+        // THREADING: raw externs suffixed Raw; only the wrappers below may be called. Every wrapper
+        // holds PdfiumLock (FileOperations.cs) - the same lock Docnet's renders use - because a
+        // UI-thread text pass racing a background render inside single-threaded PDFium corrupts the
+        // native heap (0xc0000374). Same rule the link externs follow.
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_LoadPage", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr FPDFText_LoadPageRaw(IntPtr page);
+        private static IntPtr FPDFText_LoadPage(IntPtr page)
+        { lock (PdfiumLock) return FPDFText_LoadPageRaw(page); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_ClosePage", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void FPDFText_ClosePageRaw(IntPtr textPage);
+        private static void FPDFText_ClosePage(IntPtr textPage)
+        { lock (PdfiumLock) FPDFText_ClosePageRaw(textPage); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_CountChars", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFText_CountCharsRaw(IntPtr textPage);
+        private static int FPDFText_CountChars(IntPtr textPage)
+        { lock (PdfiumLock) return FPDFText_CountCharsRaw(textPage); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_GetCharIndexAtPos", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFText_GetCharIndexAtPosRaw(IntPtr textPage, double x, double y, double xTolerance, double yTolerance);
+        private static int FPDFText_GetCharIndexAtPos(IntPtr textPage, double x, double y, double xTolerance, double yTolerance)
+        { lock (PdfiumLock) return FPDFText_GetCharIndexAtPosRaw(textPage, x, y, xTolerance, yTolerance); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_GetUnicode", CallingConvention = CallingConvention.Cdecl)]
+        private static extern uint FPDFText_GetUnicodeRaw(IntPtr textPage, int index);
+        private static uint FPDFText_GetUnicode(IntPtr textPage, int index)
+        { lock (PdfiumLock) return FPDFText_GetUnicodeRaw(textPage, index); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_CountRects", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFText_CountRectsRaw(IntPtr textPage, int startIndex, int count);
+        private static int FPDFText_CountRects(IntPtr textPage, int startIndex, int count)
+        { lock (PdfiumLock) return FPDFText_CountRectsRaw(textPage, startIndex, count); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_GetRect", CallingConvention = CallingConvention.Cdecl)]
+        private static extern bool FPDFText_GetRectRaw(IntPtr textPage, int rectIndex, out double left, out double top, out double right, out double bottom);
+        private static bool FPDFText_GetRect(IntPtr textPage, int rectIndex, out double left, out double top, out double right, out double bottom)
+        { lock (PdfiumLock) return FPDFText_GetRectRaw(textPage, rectIndex, out left, out top, out right, out bottom); }
+
+        [DllImport("pdfium.dll", EntryPoint = "FPDFText_GetText", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int FPDFText_GetTextRaw(IntPtr textPage, int startIndex, int count, [Out] ushort[] result);
+        private static int FPDFText_GetText(IntPtr textPage, int startIndex, int count, [Out] ushort[] result)
+        { lock (PdfiumLock) return FPDFText_GetTextRaw(textPage, startIndex, count, result); }
 
         // Cached text pages, keyed by page index. A cross-page selection needs the anchor page, the focus
         // page and any intermediates live at once, so this is a small multi-entry cache (a single-entry
